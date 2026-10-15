@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pelican-eval"
+version = "0.1.0"
+description = "PelicanBench: Embodied LLM & VLM Robotics Benchmark for Drawing a Pelican Riding a Bicycle on the 6-DoF SO-ARM101"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Vipin Singh" }
+]
+dependencies = [
+    "mujoco>=3.1.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pillow>=9.0.0",
+    "matplotlib>=3.7.0",
+    "pyyaml>=6.0.0",
+    "python-dotenv>=1.0.0",
+    "litellm>=1.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["envs*", "harness*", "evaluation*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]

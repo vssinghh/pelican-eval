@@ -1,0 +1,36 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+.ruff_cache/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Evaluation outputs and heavy trajectory logs
+results/*.npz
+results/**/*.npz
+*.mp4
+
+# IDE and OS files
+.DS_Store
+.vscode/
+.idea/
