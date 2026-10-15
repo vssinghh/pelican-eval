@@ -1,54 +1,55 @@
 # PelicanBench: System Design
 
-**PelicanBench** (`pelican-eval`) is an embodied evaluation benchmark and trajectory dataset for the 6-DoF **SO-ARM101** robot arm (`5` arm joints + `1` gripper holding a marker). It adapts the classic *"draw a pelican riding a bicycle"* LLM evaluation from a frictionless 2D SVG text test into a continuous 3D physical robot control benchmark across **Level 1 (MuJoCo Simulation)** and **Level 2 (Physical SO-ARM101 Robot Arm)**.
+**PelicanBench** (`pelican-eval`) benchmarks AI models on controlling a 6-DoF **SO-ARM101** robot arm (`5` arm joints + `1` gripper holding a marker) to draw a **pelican riding a bicycle** on a tabletop whiteboard.
+
+Instead of outputting a 2D SVG text file, the model must move a 3D robot arm in meters (`[X, Y, Z]`), lower the marker onto the board (`Z = 0.005 m`) to draw, and lift the marker (`Z = 0.030 m`) to travel between strokes without dragging ink across the board.
 
 ***
 
-## 1. Core Objectives
+## 1. Core Goals
 
-### Objective 1: Standardized Multi-Model Embodied Benchmark (Level 1 Sim)
-Provide a fair, hermetic Python evaluation harness powered by `LiteLLM` where any foundation model (`Claude`, `Gemini`, `OpenAI`, `DeepSeek`, `Qwen`, `Llama`) receives the **exact same system prompt** and **exact same tool interface** to control a simulated SO-ARM101 arm over a tabletop whiteboard in MuJoCo (`500 Hz` physics).
+### Goal 1: Fair Comparison in MuJoCo Simulation (`Level 1: -d sim`)
+Give every model (`Claude`, `Gemini`, `GPT`, `DeepSeek`, `Qwen`) the exact same system prompt and the same 6 tools via `LiteLLM`.
+In a single run, the model must:
+1. Check the whiteboard bounds (`[X, Y, Z]` in meters relative to the robot base).
+2. Lower the marker to `z_draw = 0.005 m` to draw and lift to `z_up = 0.030 m` when moving between parts.
+3. Work with **permanent ink**: once a line is drawn on the board, it cannot be erased.
+4. Optionally call `inspect_canvas()` to view the camera image of what it has drawn so far and add missing parts before calling `finish_drawing()`.
 
-Unlike static 2D SVG generation, the model must:
-1. Query and respect **3D metric workspace bounds** (`[X, Y, Z]` in meters in the robot base frame).
-2. Manage **vertical pen contact states** (`z_draw` on the whiteboard surface vs. `z_up` for safe travel between disconnected strokes).
-3. Deal with **permanent additive ink**: once the marker tip touches the whiteboard, strokes cannot be erased. Any forgotten pen lift leaves a permanent drag line across the board.
-4. Optionally inspect live **multi-turn camera feedback** (`overhead_cam` and 2D canvas images) to verify where prior strokes landed and place subsequent parts (such as positioning the pelican on top of the bicycle seat and handlebars).
-
-### Objective 2: Sim-to-Real Execution on Physical Hardware (Level 2 Real)
-Because Level 1 operates in the metric base frame of the 6-DoF **SO-ARM101**, the exact same agentic harness and trajectories transfer directly to the physical `so_101_follower` arm equipped with a felt-tip marker and a tabletop whiteboard after a 4-corner plane calibration.
+### Goal 2: Run on the Physical SO-ARM101 Robot (`Level 2: -d real`)
+Use the same 6-DoF **SO-ARM101** robot geometry and metric coordinates in both simulation and the real world. After touching the marker tip to the 4 corners of a physical whiteboard to measure desk tilt, the exact same harness runs on the real `so_101_follower` arm over USB.
 
 ***
 
-## 2. System Architecture
+## 2. How the System Works
 
 ```mermaid
 flowchart TD
-    subgraph Config ["1. Provider & Model Layer"]
+    subgraph Config ["1. Model Setup"]
         EnvFile[".env API Keys + config/models.yaml<br/>(Anthropic, Gemini, OpenAI, OpenRouter)"]
-        Runner["LiteLLM Unified Agent Loop<br/>(Identical System Prompt & Tool Schemas)"]
+        Runner["LiteLLM Agent Loop<br/>(Same Prompt & Tools for All Models)"]
     end
 
-    subgraph Sandbox ["2. Hermetic Agentic Tool Boundary (Additive Ink Only)"]
-        T1["get_workspace_spec()<br/>Metric Bounds [X, Y, Z] & Pen Pose"]
-        T2["draw_primitives(strokes)<br/>Lines, Arcs, Beziers, Polylines"]
-        T3["draw_waypoints(waypoints_xyz)<br/>Raw 3D [X, Y, Z] Metric Arrays"]
-        T4["run_python(code)<br/>Restricted NumPy/Math Trajectory Sandbox"]
-        T5["inspect_canvas() / finish_drawing()<br/>Returns Overhead & 2D Canvas RGB"]
+    subgraph Tools ["2. The 6 Robot Tools"]
+        T1["get_workspace_spec()<br/>Returns Whiteboard Bounds [X, Y, Z]"]
+        T2["draw_primitives(strokes)<br/>Lines, Circles, Arcs, Beziers"]
+        T3["draw_waypoints(waypoints_xyz)<br/>List of 3D [X, Y, Z] Points"]
+        T4["run_python(code)<br/>NumPy & Math Sandbox"]
+        T5["inspect_canvas() / finish_drawing()<br/>Returns Whiteboard & Camera Images"]
     end
 
-    subgraph Control ["3. Motion & Kinematics Layer (20 Hz Policy / 500 Hz Physics)"]
-        IK["5-DoF Damped Least-Squares IK Solver<br/>Target [X, Y, Z, Pitch] -> Joint Angles [q0..q4]"]
-        Interp["Minimum-Jerk Waypoint Interpolator<br/>Smooth Cartesian & Joint Stepping"]
+    subgraph Motion ["3. Robot Motion Planner"]
+        Interp["Curve Sampler (2.5 mm steps)"]
+        IK["5-DoF Inverse Kinematics Solver<br/>Target [X, Y, Z] to Joint Angles [q0..q4]"]
     end
 
-    subgraph Execution ["4. Dual Domain Execution Engine"]
-        Sim["Level 1: SimWhiteboardEnv (MuJoCo 500 Hz)<br/>Contact Detection + Live Canvas Texture"]
-        Real["Level 2: RealWhiteboardEnv (SO-ARM101 USB)<br/>4-Corner Plane Fit + USB Overhead Webcam"]
+    subgraph Env ["4. Sim or Real Robot"]
+        Sim["Level 1: SimWhiteboardEnv (MuJoCo 500 Hz)"]
+        Real["Level 2: RealWhiteboardEnv (SO-ARM101 USB)"]
     end
 
-    subgraph Telemetry ["5. Dataset & Leaderboard Logger"]
-        Metrics["5 Core Metrics: Hallucinations, Tool Calls,<br/>End-to-End Time (s), Cost (USD), Visual Score"]
+    subgraph Output ["5. Saved Results"]
+        Metrics["5 Metrics: Hallucinations, Tool Calls,<br/>End-to-End Time, Cost, Visual Score"]
     end
 
     EnvFile ==> Runner
@@ -63,45 +64,43 @@ flowchart TD
 
 ***
 
-## 3. Repository Structure & CLI Commands
+## 3. Repository Layout & Commands
 
 ```text
-pelican-eval/                     # Project Root (Isolated inside robotics/pelican-eval)
+pelican-eval/
 ├── assets/
-│   └── so101/                    # SO-ARM101 MuJoCo XML + marker attachment + whiteboard geom
-│       ├── meshes/               # STL meshes for SO-ARM101 links and marker holder
-│       ├── so101_marker.xml      # SO-ARM101 with rigid marker & pen_tip site
-│       └── whiteboard_scene.xml  # Tabletop scene with whiteboard canvas & 3 cameras
+│   ├── so101/                    # SO-ARM101 MuJoCo XML, STL meshes, marker, and whiteboard
+│   │   ├── meshes/
+│   │   ├── so101_marker.xml      # SO-ARM101 arm with marker and pen_tip site
+│   │   └── whiteboard_scene.xml  # Desk, framed whiteboard, and cameras
+│   └── verification/             # Reference pelican drawing images and GIF
 │
 ├── config/
-│   ├── models.yaml               # Model IDs, temperature, max_turns, and pricing overrides
-│   └── calibration.json          # Saved 4-corner plane fit for Level 2 physical whiteboard
+│   ├── models.yaml               # List of models and default turn/timeout settings
+│   └── calibration.json          # 4-corner plane fit for the real whiteboard
 │
-├── envs/                         # Shared Sim and Real Whiteboard Environments
-│   ├── __init__.py
-│   ├── base.py                   # Abstract SO101WhiteboardEnv & metric workspace constants
-│   ├── ik_solver.py              # Damped Least-Squares 5-DoF IK solver for pen_tip site
-│   ├── trajectory.py             # Primitive discretizer (arc, bezier, line) & min-jerk planner
-│   ├── sim_env.py                # Level 1: MuJoCo 500 Hz environment & live ink renderer
-│   ├── real_env.py               # Level 2: Physical SO-ARM101 Feetech bus + USB webcam
-│   ├── calibrate_board.py        # 4-corner physical whiteboard touch calibration CLI
-│   └── verify_whiteboard.py      # Deterministic test script drawing a reference bike & pelican
+├── envs/                         # Sim and Real Whiteboard Environments
+│   ├── base.py                   # Shared SO101WhiteboardEnv interface and workspace bounds
+│   ├── ik_solver.py              # 5-DoF Inverse Kinematics solver for pen_tip
+│   ├── trajectory.py             # Converts lines, circles, arcs, and Beziers into 3D points
+│   ├── sim_env.py                # Level 1: MuJoCo 500 Hz simulation and ink drawing
+│   ├── real_env.py               # Level 2: Real SO-ARM101 USB servo driver + webcam
+│   ├── calibrate_board.py        # 4-corner touch calibration script for the real board
+│   └── verify_whiteboard.py      # Test script that draws a reference pelican on a bike
 │
-├── harness/                      # Agentic Tool Sandbox & LiteLLM Multi-Provider Runner
-│   ├── __init__.py
-│   ├── prompts.py                # Locked system and task prompts
-│   ├── tools.py                  # 6 tool implementations + spatial/code hallucination counters
-│   ├── python_sandbox.py         # Restricted exec() runner exposing numpy, math, and draw APIs
-│   └── agent_loop.py             # LiteLLM conversation loop, timer, and cost tracker
+├── harness/                      # Agent Loop & Tool Sandbox
+│   ├── prompts.py                # System and task prompts given to every model
+│   ├── tools.py                  # The 6 tools and hallucination counters
+│   ├── python_sandbox.py         # Safe exec() sandbox with numpy, math, and draw functions
+│   └── agent_loop.py             # LiteLLM multi-turn loop, timer, and cost tracker
 │
-├── evaluation/                   # Benchmark Runner, Visual Judge & Dataset Writer
-│   ├── __init__.py
-│   ├── metrics.py                # 5-metric aggregator (Hallucinations, Calls, Time, Cost, Visual)
-│   ├── visual_judge.py           # 10-point anatomical VLM judge rubric evaluator
-│   ├── recorder.py               # Episode HDF5/JSON writer, PNG gallery & GIF generator
+├── evaluation/                   # Scoring & Dataset Saving
+│   ├── metrics.py                # Combines the 5 metrics and formats Markdown tables
+│   ├── visual_judge.py           # Scores the final drawing from 0 to 10
+│   ├── recorder.py               # Saves JSON logs, PNGs, GIF, and 500 Hz .npz trajectories
 │   └── __main__.py               # CLI: python -m evaluation
 │
-├── tests/                        # Unit & integration tests
+├── tests/                        # Unit and integration tests
 ├── DESIGN.md
 ├── LEADERBOARD.md
 ├── README.md
@@ -109,107 +108,107 @@ pelican-eval/                     # Project Root (Isolated inside robotics/pelic
 ```
 
 ### CLI Commands
-1. **Verify MuJoCo Whiteboard & Reference Drawing (`Level 1`)**:
-   ```bash
-   uv run python -m envs.verify_whiteboard -d sim
-   ```
-2. **Evaluate a Single Model or Full Model Sweep (`Level 1 Sim`)**:
-   ```bash
-   # Single model run
-   uv run python -m evaluation -d sim -m anthropic/claude-sonnet-4-20250514
-   uv run python -m evaluation -d sim -m gemini/gemini-2.5-pro
-   uv run python -m evaluation -d sim -m openai/gpt-4o
+```bash
+# 1. Test the MuJoCo whiteboard with the reference drawing (no API key needed)
+uv run python -m envs.verify_whiteboard -d sim
 
-   # Sweep all models in config/models.yaml
-   uv run python -m evaluation -d sim -m all -o results/sim_benchmark
-   ```
-3. **Calibrate & Run on Physical SO-ARM101 (`Level 2 Real`)**:
-   ```bash
-   # Touch marker tip to 4 corners of physical whiteboard to fit Z(X, Y) plane
-   uv run python -m envs.calibrate_board -p /dev/tty.usbmodem5B790143431
+# 2. Evaluate a single model in MuJoCo Sim
+uv run python -m evaluation -d sim -m anthropic/claude-sonnet-4-20250514
+uv run python -m evaluation -d sim -m gemini/gemini-2.5-pro
+uv run python -m evaluation -d sim -m openai/gpt-4o
 
-   # Run model on physical robot arm with overhead USB webcam
-   uv run python -m evaluation -d real -m anthropic/claude-sonnet-4-20250514
-   ```
+# 3. Evaluate all models in config/models.yaml
+uv run python -m evaluation -d sim -m all -o results/sim_benchmark
+
+# 4. Calibrate and run on the physical SO-ARM101 arm
+uv run python -m envs.calibrate_board -p /dev/tty.usbmodem5B790143431
+uv run python -m evaluation -d real -p /dev/tty.usbmodem5B790143431 -m anthropic/claude-sonnet-4-20250514
+```
 
 ***
 
-## 4. Robot Hardware, Workspace Geometry & Ink Physics (`envs/`)
+## 4. Robot Workspace & First-Principles Math (`envs/`)
 
-Both `SimWhiteboardEnv` (Level 1) and `RealWhiteboardEnv` (Level 2) use the 6-DoF **SO-ARM101** (`shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `wrist_roll`, plus `gripper` holding a marker):
+### 4.1 Whiteboard Coordinates (Meters from Robot Base `[0, 0, 0]`)
+Both `SimWhiteboardEnv` and `RealWhiteboardEnv` use the same 3D coordinate system in **meters**:
+* **`X` (Up / Down on the canvas)**: `0.160 m` (bottom edge, closest to robot base) to `0.300 m` (top edge, furthest from robot base). Total height is `14 cm`, centered at `X = 0.230 m`.
+* **`Y` (Left / Right on the canvas)**: `+0.140 m` (left edge) to `-0.140 m` (right edge). Total width is `28 cm`, centered at `Y = 0.000 m`.
+* **`Z_draw = 0.005 m`**: Whiteboard surface height. Whenever the marker tip is at `Z <= 0.008 m`, it leaves blue ink on the board.
+* **`Z_up = 0.030 m`**: Safe travel height (`2.5 cm` above the board) to move between strokes without drawing ink.
+* **`Z < 0.000 m`**: Table crash floor. Commanding `Z < 0.000 m` counts as a spatial hallucination and is clamped to `0.002 m`.
 
-### 4.1 Metric Coordinate Frame & Workspace Bounds
-All coordinates are expressed in **meters** relative to the SO-ARM101 base origin `[0.0, 0.0, 0.0]`:
-* **`X` (Forward Reach)**: `[0.160, 0.300]` meters (`14.0 cm` depth). Center is `X = 0.230 m`.
-* **`Y` (Lateral Width)**: `[-0.140, 0.140]` meters (`28.0 cm` width, where `+Y` is left and `-Y` is right). Center is `Y = 0.000 m`.
-* **`Z_draw` (Whiteboard Contact Surface)**: `0.005` meters (`5 mm` above the desk plane, matching the `5 mm` whiteboard thickness). Contact is registered whenever `0.002 m <= Z <= 0.008 m`.
-* **`Z_up` (Safe Pen Travel Height)**: `0.030` meters (`25 mm` clearance above the whiteboard surface).
-* **`Z_collision` (Table Crash Floor)**: `< 0.000` meters (commanding `Z < 0.000 m` triggers a spatial hallucination count and is clamped at `0.002 m` to protect the marker and servos).
+### 4.2 Inverse Kinematics (`envs/ik_solver.py`)
+1. **What is it?**
+   A math solver that takes a target 3D point `[X, Y, Z]` in meters for the marker tip and finds the joint angles `[q0, q1, q2, q3, q4]` in radians that put the marker tip at that exact point.
+2. **Why do we use it?**
+   Models think in 2D/3D space (circles for wheels, lines for the bike frame), while the robot motors only understand joint angles. Without a damped solver, points near the edge of the arm's reach can cause huge joint jumps.
+3. **How do we use it?**
+   At each `2.5 mm` step along a stroke, `SO101IKSolver` measures the 3D position error $\mathbf{e}$ between the target `[X, Y, Z]` and the current `pen_tip` position, and updates the joints using Damped Least-Squares:
+   $$\Delta \mathbf{q} = \mathbf{J}^T (\mathbf{J} \mathbf{J}^T + \lambda^2 \mathbf{I})^{-1} \mathbf{e}$$
+   Across the entire `14 cm x 28 cm` whiteboard, this keeps tracking error below `0.15 mm`.
+4. **Where is it used in the real world?**
+   Every industrial robot controller (FANUC, KUKA, Franka, Universal Robots) and simulation stack (MuJoCo, Drake, Isaac Lab) uses damped Jacobian IK to track smooth tool paths.
 
-### 4.2 Level 1: MuJoCo `500 Hz` Ink Physics (`envs/sim_env.py`)
-1. **Marker Attachment**: A cylindrical marker body is mounted rigidly between the SO-ARM101 gripper jaws with a `pen_tip` site at its nib (`4.5 cm` below the jaw pad center when pitched vertically at `pitch = 1.45 rad`).
-2. **Contact-Driven Permanent Ink Buffer**:
-   - Physics steps at `500 Hz` (`dt = 0.002 s`).
-   - At every physics substep where `pen_tip` satisfies `Z <= 0.008 m`, the environment projects `(X, Y)` onto a `1000 x 500` pixel 2D whiteboard buffer (`0.28 mm/pixel` resolution) and draws an anti-aliased dark ink segment from the previous contact sub-step.
-   - The updated 2D whiteboard texture is uploaded into MuJoCo's `whiteboard_tex` asset via `mujoco.mjr_uploadTexture` so the simulated `overhead_cam` and `third_person_cam` see the exact physical ink strokes on the board in real time.
-3. **Permanent Additive Constraint**: The whiteboard buffer has no erase method during an episode. If a model translates between disconnected shapes without lifting `Z` above `0.008 m`, the resulting drag line is permanently drawn onto the canvas.
+### 4.3 How Drawing Works in MuJoCo (`envs/sim_env.py`)
+* The physics engine runs at **`500 Hz`** (`1` step every `2 ms`).
+* At every `2 ms` physics step, `SimWhiteboardEnv` checks the 3D position of the `pen_tip` site at the end of the marker.
+* If `Z <= 0.008 m`, it maps `(X, Y)` to a pixel `(row, col)` on a `1000 x 500` image buffer and draws a blue line from the previous contact point.
+* It uploads that updated image buffer into MuJoCo's `whiteboard_tex` texture so the simulated `overhead_cam` and `third_person_cam` see the drawn ink live on the 3D whiteboard.
 
-### 4.3 Level 2: Physical SO-ARM101 Calibration & Compliance (`envs/real_env.py`)
-1. **4-Corner Plane Fit (`envs/calibrate_board.py`)**:
-   - Real desks and whiteboards have slight tilt (`1 to 4 mm` across `28 cm`).
-   - Before running Level 2, you guide the follower arm's marker tip to lightly touch the 4 corners of the physical whiteboard (`Front-Left`, `Front-Right`, `Back-Left`, `Back-Right`).
-   - Forward kinematics computes the 4 corner positions $\{(X_i, Y_i, Z_i)\}_{i=1}^4$ and fits a least-squares plane:
-     $$Z_{\text{board}}(X, Y) = a X + b Y + c$$
-   - At runtime, any commanded height $Z$ is offset by $\Delta Z(X, Y) = Z_{\text{board}}(X, Y) - 0.005$ so marker contact pressure stays uniform across the entire board.
-2. **Passive Marker Mount Compliance**:
-   - The marker is held in the SO-ARM101 gripper with a foam collar providing `2 mm` of passive axial compliance, preventing `STS3215` servo overload during continuous surface contact.
+### 4.4 Real Whiteboard 4-Corner Calibration (`envs/calibrate_board.py`)
+1. **What is it?**
+   A one-time setup script that measures the exact tilt of your physical desk and whiteboard by having you touch the marker tip to the 4 corners of the board.
+2. **Why do we use it?**
+   Real desks are rarely flat to the millimeter. If one side of the whiteboard is `3 mm` higher than the other, a fixed height of `Z = 0.005 m` will press too hard on one side and float in the air (leaving no ink) on the other side.
+3. **How do we use it?**
+   Touching the 4 corners gives 4 3D points $\{(X_i, Y_i, Z_i)\}_{i=1}^4$. We fit a flat plane:
+   $$Z_{\text{board}}(X, Y) = a X + b Y + c$$
+   During real robot runs (`-d real`), `RealWhiteboardEnv` adds the height offset $\Delta Z(X, Y) = Z_{\text{board}}(X, Y) - 0.005$ to every waypoint so the marker presses evenly across the entire board.
+4. **Where is it used in the real world?**
+   3D printers (auto bed leveling), CNC routers, and PCB assembly robots all probe 3 or more points on the work surface to fit a tilt plane before starting a job.
 
 ***
 
-## 5. Agentic Sandbox & Tool Contract (`harness/`)
+## 5. The 6 Robot Tools (`harness/tools.py`)
 
-Every model runs inside `harness/agent_loop.py` via `litellm.completion` (`max_turns = 10`, configurable in `config/models.yaml`) with access to **6 tools**:
+Every model can call these 6 tools in any order (up to `max_turns = 10` turns):
 
-| Tool Name | Arguments | Behavior & Hallucination Checks |
+| Tool | Input | What It Does & What Counts as a Hallucination |
 | :- | :- | :- |
-| **`get_workspace_spec`** | `{}` | Returns JSON with `x_bounds: [0.16, 0.30]`, `y_bounds: [-0.14, 0.14]`, `z_draw: 0.005`, `z_up: 0.030`, coordinate orientation guide (`+X` is top of canvas / away from robot base, `+Y` is left), and current `pen_tip` `[X, Y, Z]`. |
-| **`draw_primitives`** | `strokes: list[dict]` | Accepts high-level primitives in meters: `line`, `polyline`, `circle`, `arc`, and `cubic_bezier`. For each primitive, automatically lifts to `z_up`, moves to start `(x, y)`, lowers to `z_draw`, traces the discretized curve (`2 mm` step spacing), and lifts to `z_up`. Logs a **Spatial Hallucination** for any point outside `[x_bounds, y_bounds]` or unreachable by IK. |
-| **`draw_waypoints`** | `waypoints_xyz: list[[x, y, z]]` | Low-level 3D trajectory mode. Moves `pen_tip` sequentially through the metric `[X, Y, Z]` list. Logs a **Spatial Hallucination** if any point is out of `[X, Y]` bounds, crashes below the table (`Z < 0.000 m`), fails IK convergence, or if the entire call stays in mid-air (`Z > 0.008 m`, drawing `0` pixels of ink). |
-| **`run_python`** | `code: str` | Executes custom Python code inside a restricted in-memory sandbox pre-populated with `np` (`numpy`), `math`, `draw_primitives`, `draw_waypoints`, and `WORKSPACE_SPEC`. Captures `stdout` and any executed stroke telemetry. Logs a **Code Hallucination** if the script raises a `SyntaxError` or runtime exception, or attempts forbidden imports (`os`, `sys`, `subprocess`, `open`, `mujoco`). |
-| **`inspect_canvas`** | `{}` | Renders and returns two images to the VLM conversation: (1) the clean top-down 2D canvas image with a metric coordinate grid overlay along the border, and (2) the 3D MuJoCo/webcam `overhead_cam` view showing the robot arm and whiteboard. |
-| **`finish_drawing`** | `summary: str` | Terminates the episode, stops the end-to-end wall-clock timer, and triggers final evaluation. |
+| **`get_workspace_spec`** | `{}` | Returns the whiteboard `[X, Y, Z]` bounds in meters, coordinate directions (`+X` is up, `+Y` is left), and current marker position. |
+| **`draw_primitives`** | `strokes: list[dict]` | Draws 2D shapes in meters (`line`, `polyline`, `circle`, `arc`, `ellipse`, `bezier`). Automatically lifts to `z_up` before and after each shape. Logs a **Spatial Hallucination** if any point falls outside the board. |
+| **`draw_waypoints`** | `waypoints_xyz: list[[x, y, z]]` | Moves the marker through an explicit list of 3D `[X, Y, Z]` coordinates. Logs a **Spatial Hallucination** if a point is out of bounds, hits the table (`Z < 0`), or stays in the air the whole time (`0` ink drawn). |
+| **`run_python`** | `code: str` | Runs custom Python math using `np` (`numpy`), `math`, `WORKSPACE_SPEC`, `draw_primitives`, and `draw_waypoints`. Logs a **Code Hallucination** if the code has a syntax/runtime error or tries to import blocked modules (`os`, `sys`, `subprocess`, `open`). |
+| **`inspect_canvas`** | `{}` | Moves the arm out of the way and returns 2 PNG images to the model: (1) the 2D whiteboard with metric `X/Y` rulers along the edges, and (2) the 3D overhead camera view. |
+| **`finish_drawing`** | `summary: str` | Parks the arm at home, stops the timer, and scores the final drawing. |
 
 ***
 
-## 6. The 5 Evaluation Metrics & Dataset Format (`evaluation/`)
+## 6. Scoring & Saved Files (`evaluation/`)
 
-### 6.1 The 5 Core Metrics (`evaluation/metrics.py`)
+### 6.1 The 5 Benchmark Metrics (`evaluation/metrics.py`)
+1. **Hallucinations (`total = spatial + code`)**:
+   - `spatial_hallucinations`: Out-of-bounds `(X, Y)` coordinates, table crashes (`Z < 0.0 m`), unreachable IK points, or air-drawing calls (`0` ink pixels).
+   - `code_hallucinations`: Invalid tool names, bad JSON arguments, or Python exceptions inside `run_python`.
+2. **Tool Calls**: Total number of tool calls made during the episode.
+3. **End-to-End Time (`s`)**: Total wall-clock seconds from sending the prompt to `finish_drawing()`.
+4. **Cost (`USD`)**: Total API token cost computed by `LiteLLM`.
+5. **Visual Score (`0 to 10`)**: Graded across 5 parts (`0` to `2` points each):
+   - **Wheels (`0..2`)**: Two separate circular wheels near the bottom of the board.
+   - **Bicycle Frame (`0..2`)**: Frame connecting the wheels, seat, pedals, and handlebars.
+   - **Pelican Head & Beak (`0..2`)**: Head and long pouched beak near the top.
+   - **Pelican Body & Limbs (`0..2`)**: Body on the seat, wing reaching forward, and legs reaching down.
+   - **Riding Composition (`0..2`)**: Pelican properly placed riding the bicycle.
 
-1. **Hallucinations (`total = spatial_hallucinations + code_hallucinations`)**:
-   - **`spatial_hallucinations`**: Count of primitive or waypoint calls containing out-of-bounds `(X, Y)` coordinates, table surface crashes (`Z < 0.000 m`), IK unreachability (`pos_error > 3.0 mm`), or air-drawing calls (`0` ink contacts recorded).
-   - **`code_hallucinations`**: Count of malformed tool calls, unknown tool names, or Python exceptions inside `run_python`.
-2. **Tool Calls (`total_tool_calls`)**:
-   - Total number of tool calls made before `finish_drawing`, plus per-tool breakdown (`spec`, `primitives`, `waypoints`, `python`, `inspect`).
-3. **End-to-End Time (`e2e_time_s`)**:
-   - Single wall-clock duration in seconds: `t_finish - t_start`, covering all LLM reasoning, code execution, and robot trajectory execution.
-4. **Cost (`cost_usd`)**:
-   - Cumulative `USD` cost across all turns computed via `litellm.completion_cost` (input tokens + output/reasoning tokens + vision tokens from `inspect_canvas`).
-5. **Visual Output (`visual_score` out of `10` + Visual Artifacts)**:
-   - Evaluated on the final clean whiteboard image (`canvas_final.png`) by a deterministic VLM Judge ensemble (`evaluation/visual_judge.py`) across 5 anatomical criteria (`0`, `1`, or `2` points each):
-     1. **Wheels (`0..2 pts`)**: Two distinct circular wheels separated horizontally.
-     2. **Bicycle Structure (`0..2 pts`)**: Frame connecting the wheels, seat post, and handlebars.
-     3. **Pelican Head & Beak (`0..2 pts`)**: Recognizable bird head with a characteristic long pouched beak.
-     4. **Pelican Body & Limbs (`0..2 pts`)**: Torso, wings, and legs extending downward.
-     5. **Riding Composition (`0..2 pts`)**: Pelican properly positioned atop the bicycle seat/frame with limbs aligned toward pedals/handlebars and minimal stray drag lines.
-
-### 6.2 Saved Dataset Bundle per Run (`results/<domain>/<model_slug>_seed<N>/`)
-Every evaluated model run saves a self-contained episode directory for benchmarking and imitation learning:
+### 6.2 Files Saved for Each Run (`results/<domain>/<model>_seed<N>/`)
 ```text
 results/sim_benchmark/claude_sonnet_4_seed0/
-├── metrics.json                  # The 5 headline metrics + token & stroke breakdowns
-├── transcript.json               # Full prompt, reasoning, tool calls, and tool outputs
-├── canvas_final.png              # Clean 1000x500 top-down whiteboard drawing
-├── overhead_final.png            # 3D MuJoCo / webcam overhead view with robot arm
-├── timelapse.gif                 # Animated stroke-by-stroke robot drawing replay
-└── trajectory_500hz.npz          # 500 Hz qpos (T, 6), qvel (T, 6), pen_tip_xyz (T, 3), ink_contact (T,)
+├── metrics.json                  # The 5 metrics + token and tool call breakdown
+├── transcript.json               # Full prompt, model replies, tool calls, and errors
+├── canvas_final.png              # Clean 1000x500 whiteboard drawing
+├── canvas_grid.png               # Whiteboard drawing with metric X/Y rulers
+├── overhead_final.png            # 3D overhead camera view
+├── third_person_final.png        # 3D side camera view showing the SO-ARM101 arm
+├── timelapse.gif                 # Side-by-side animated GIF of the robot drawing
+└── trajectory_500hz.npz          # 500 Hz joint positions, velocities, pen tip XYZ, and ink contact
 ```
