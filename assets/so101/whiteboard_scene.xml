@@ -1,0 +1,44 @@
+<mujoco model="pelican_whiteboard_scene">
+  <option timestep="0.002" integrator="implicitfast" cone="elliptic" impratio="10"/>
+
+  <visual>
+    <headlight diffuse="0.35 0.35 0.35" ambient="0.28 0.28 0.30" specular="0.10 0.10 0.10"/>
+    <quality shadowsize="2048" offsamples="4"/>
+    <global offwidth="800" offheight="600" azimuth="145" elevation="-28"/>
+  </visual>
+
+  <include file="so101_marker.xml"/>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.90 0.93 0.96" rgb2="0.72 0.78 0.85" width="512" height="3072"/>
+    <texture name="wood_tex" type="2d" builtin="flat" rgb1="0.72 0.56 0.38" rgb2="0.68 0.52 0.34" width="256" height="256"/>
+    <texture name="floor_tex" type="2d" builtin="checker" rgb1="0.22 0.24 0.27" rgb2="0.18 0.20 0.22" width="256" height="256"/>
+    <texture name="whiteboard_tex" type="2d" builtin="flat" rgb1="0.98 0.98 0.99" rgb2="0.98 0.98 0.99" width="500" height="1000"/>
+
+    <material name="wood_table" rgba="0.72 0.55 0.38 1" specular="0.08" shininess="0.15" reflectance="0.01"/>
+    <material name="floor_mat" texture="floor_tex" texrepeat="6 6" texuniform="true" reflectance="0.05"/>
+    <material name="whiteboard_mat" texture="whiteboard_tex" texuniform="false" specular="0.05" shininess="0.10" reflectance="0.0"/>
+    <material name="frame_mat" rgba="0.22 0.24 0.28 1" specular="0.2" shininess="0.3"/>
+  </asset>
+
+  <worldbody>
+    <light name="main_light" pos="0.25 -0.20 0.95" dir="0.0 0.15 -0.98" diffuse="0.55 0.55 0.55" specular="0.12 0.12 0.12" directional="false" castshadow="false"/>
+    <light name="fill_light" pos="0.30 0.35 0.85" dir="-0.1 -0.25 -0.96" diffuse="0.30 0.32 0.35" specular="0.05 0.05 0.05" directional="false" castshadow="false"/>
+
+    <geom name="floor" type="plane" pos="0 0 -0.72" size="2.0 2.0 0.05" material="floor_mat" contype="1" conaffinity="1"/>
+    <body name="table" pos="0.20 0.0 -0.02">
+      <geom name="desk_top" type="box" pos="0 0 0" size="0.35 0.38 0.02" material="wood_table" contype="1" conaffinity="1" friction="0.9 0.02 0.01"/>
+    </body>
+
+    <body name="whiteboard" pos="0.230 0.0 0.0025">
+      <geom name="whiteboard_surface" type="box" pos="0 0 0" size="0.070 0.140 0.0025" material="whiteboard_mat" contype="1" conaffinity="1" friction="0.4 0.01 0.005"/>
+      <geom name="frame_north" type="box" pos="0.072 0 0.001" size="0.002 0.144 0.0035" material="frame_mat" contype="0" conaffinity="0"/>
+      <geom name="frame_south" type="box" pos="-0.072 0 0.001" size="0.002 0.144 0.0035" material="frame_mat" contype="0" conaffinity="0"/>
+      <geom name="frame_east" type="box" pos="0 -0.142 0.001" size="0.074 0.002 0.0035" material="frame_mat" contype="0" conaffinity="0"/>
+      <geom name="frame_west" type="box" pos="0 0.142 0.001" size="0.074 0.002 0.0035" material="frame_mat" contype="0" conaffinity="0"/>
+    </body>
+
+    <camera name="third_person_cam" pos="0.48 -0.24 0.29" xyaxes="0.45 0.893 0.0 -0.48 0.24 0.84" fovy="50"/>
+    <camera name="overhead_cam" pos="0.230 0.0 0.38" xyaxes="0.0 -1.0 0.0 1.0 0.0 0.0" fovy="46"/>
+  </worldbody>
+</mujoco>

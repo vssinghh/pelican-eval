@@ -8,7 +8,7 @@ Head-to-head comparison of Large Language Models and Vision-Language Models cont
 
 | Model | Provider | Hallucinations (`Spatial / Code`) | Tool Calls | End-to-End Time (`s`) | Cost (`USD`) | Visual Score (`0..10`) | Canvas & Replay |
 | :- | :- | :-: | :-: | :-: | :-: | :-: | :- |
-| *Pending initial benchmark runs* | - | - | - | - | - | - | - |
+| `reference/expert` | Reference Baseline | `0 (0 / 0)` | `5` | `1.37s` | `\$0.0000` | **`10.0 / 10`** | [Canvas](assets/verification/reference_canvas_grid.png) / [GIF](assets/verification/reference_timelapse.gif) |
 
 ***
 
@@ -16,4 +16,4 @@ Head-to-head comparison of Large Language Models and Vision-Language Models cont
 
 | Model | Provider | Hallucinations (`Spatial / Code`) | Tool Calls | End-to-End Time (`s`) | Cost (`USD`) | Visual Score (`0..10`) | Physical Board Photo |
 | :- | :- | :-: | :-: | :-: | :-: | :-: | :- |
-| *Pending physical runs* | - | - | - | - | - | - | - |
+| `reference/expert (calibrated FK)` | Reference Baseline | `0 (0 / 0)` | `5` | `0.13s` | `\$0.0000` | **`10.0 / 10`** | [Canvas](results/real_benchmark/reference_expert_seed0/canvas_final.png) |
