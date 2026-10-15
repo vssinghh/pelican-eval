@@ -19,6 +19,10 @@
     <material name="floor_mat" texture="floor_tex" texrepeat="6 6" texuniform="true" reflectance="0.05"/>
     <material name="whiteboard_mat" texture="whiteboard_tex" texuniform="false" specular="0.05" shininess="0.10" reflectance="0.0"/>
     <material name="frame_mat" rgba="0.22 0.24 0.28 1" specular="0.2" shininess="0.3"/>
+    <material name="dock_base_mat" rgba="0.20 0.22 0.26 1" specular="0.2" shininess="0.3"/>
+    <material name="ink_black_mat" rgba="0.12 0.14 0.18 1" specular="0.3" shininess="0.4"/>
+    <material name="ink_blue_mat" rgba="0.10 0.25 0.78 1" specular="0.3" shininess="0.4"/>
+    <material name="ink_red_mat" rgba="0.84 0.14 0.14 1" specular="0.3" shininess="0.4"/>
   </asset>
 
   <worldbody>
@@ -38,7 +42,25 @@
       <geom name="frame_west" type="box" pos="0 0.142 0.001" size="0.074 0.002 0.0035" material="frame_mat" contype="0" conaffinity="0"/>
     </body>
 
+    <!-- 3-Slot Marker Stand (Black at X=0.170, Blue at X=0.210, Red at X=0.250, Y=-0.175) -->
+    <body name="marker_dock" pos="0.210 -0.175 0.0">
+      <geom name="dock_base" type="box" pos="0 0 0.006" size="0.058 0.016 0.006" material="dock_base_mat" contype="0" conaffinity="0"/>
+      <geom name="slot_ring_black" type="cylinder" pos="-0.040 0 0.0125" size="0.009 0.0015" material="ink_black_mat" contype="0" conaffinity="0"/>
+      <geom name="slot_ring_blue" type="cylinder" pos="0.000 0 0.0125" size="0.009 0.0015" material="ink_blue_mat" contype="0" conaffinity="0"/>
+      <geom name="slot_ring_red" type="cylinder" pos="0.040 0 0.0125" size="0.009 0.0015" material="ink_red_mat" contype="0" conaffinity="0"/>
+
+      <!-- Parked Markers in the 3-Slot Stand -->
+      <geom name="dock_barrel_black" type="cylinder" pos="-0.040 0 0.042" size="0.0055 0.030" material="marker_body_mat" contype="0" conaffinity="0"/>
+      <geom name="dock_cap_black" type="cylinder" pos="-0.040 0 0.064" size="0.0075 0.010" material="ink_black_mat" contype="0" conaffinity="0"/>
+
+      <geom name="dock_barrel_blue" type="cylinder" pos="0.000 0 0.042" size="0.0055 0.030" material="marker_body_mat" contype="0" conaffinity="0"/>
+      <geom name="dock_cap_blue" type="cylinder" pos="0.000 0 0.064" size="0.0075 0.010" material="ink_blue_mat" contype="0" conaffinity="0"/>
+
+      <geom name="dock_barrel_red" type="cylinder" pos="0.040 0 0.042" size="0.0055 0.030" material="marker_body_mat" contype="0" conaffinity="0"/>
+      <geom name="dock_cap_red" type="cylinder" pos="0.040 0 0.064" size="0.0075 0.010" material="ink_red_mat" contype="0" conaffinity="0"/>
+    </body>
+
     <camera name="third_person_cam" pos="0.48 -0.24 0.29" xyaxes="0.45 0.893 0.0 -0.48 0.24 0.84" fovy="50"/>
-    <camera name="overhead_cam" pos="0.230 0.0 0.38" xyaxes="0.0 -1.0 0.0 1.0 0.0 0.0" fovy="46"/>
+    <camera name="overhead_cam" pos="0.230 -0.015 0.40" xyaxes="0.0 -1.0 0.0 1.0 0.0 0.0" fovy="48"/>
   </worldbody>
 </mujoco>

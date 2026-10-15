@@ -81,10 +81,12 @@ class SO101IKSolver:
         target_xyz: np.ndarray | list[float],
         target_pitch: float | None = None,
         q_init: np.ndarray | None = None,
+        gripper_norm: float | None = None,
     ) -> IKResult:
         """Solve for the 5 arm joint angles that place pen_tip at target_xyz."""
         tgt = np.asarray(target_xyz, dtype=np.float64).reshape(3)
         pitch_goal = self.target_pitch if target_pitch is None else float(target_pitch)
+        g_norm = self.gripper_norm if gripper_norm is None else float(gripper_norm)
 
         mujoco.mj_resetData(self.model, self.data)
 
@@ -98,7 +100,7 @@ class SO101IKSolver:
                 self.data.qpos[self._qpos_adrs[idx]] = float(init_guess[idx])
 
         self.data.qpos[self._qpos_adrs[4]] = -np.pi / 2.0
-        self.data.qpos[self._qpos_adrs[5]] = norm_gripper_to_raw(self.gripper_norm)
+        self.data.qpos[self._qpos_adrs[5]] = norm_gripper_to_raw(g_norm)
 
         dof_idx = self._dof_adrs[:4]
         q_idx = self._qpos_adrs[:4]
@@ -141,7 +143,7 @@ class SO101IKSolver:
             ],
             dtype=np.float32,
         )
-        action_6d = np.concatenate([q_5d, [np.float32(self.gripper_norm)]])
+        action_6d = np.concatenate([q_5d, [np.float32(g_norm)]])
 
         return IKResult(
             q_5d=q_5d,

@@ -33,6 +33,30 @@ HOME_PROPRIO_6D = np.array(
 # Physical SO-ARM101 gripper hinge range mapped to normalized [0.0 (closed), 1.0 (open)]
 GRIPPER_RAW_CLOSED: float = -0.15
 GRIPPER_RAW_OPEN: float = 0.85
+GRIPPER_NORM_GRASP: float = 0.15
+GRIPPER_NORM_OPEN: float = 0.65
+
+# Available marker colors and 3-slot dock geometry
+AVAILABLE_MARKER_COLORS: tuple[str, ...] = ("black", "blue", "red")
+
+MARKER_COLORS_RGB: dict[str, tuple[int, int, int]] = {
+    "black": (28, 32, 42),
+    "blue": (22, 65, 195),
+    "red": (210, 32, 32),
+}
+
+MARKER_COLORS_RGBA: dict[str, tuple[float, float, float, float]] = {
+    "black": (0.12, 0.14, 0.18, 1.0),
+    "blue": (0.10, 0.25, 0.78, 1.0),
+    "red": (0.84, 0.14, 0.14, 1.0),
+}
+
+MARKER_DOCK_SLOTS_XYZ: dict[str, list[float]] = {
+    "black": [0.170, -0.175, 0.015],
+    "blue": [0.210, -0.175, 0.015],
+    "red": [0.250, -0.175, 0.015],
+}
+MARKER_DOCK_HOVER_Z: float = 0.055
 
 # Physical 6-DoF SO-ARM101 joint limits (5 arm joints in radians + normalized gripper in [0.0, 1.0])
 JOINT_LIMITS_LOW = np.array(
@@ -50,7 +74,7 @@ STS3215_CENTER_TICK: int = 2048
 
 # Locked Metric Whiteboard Workspace Specification (in meters relative to SO-ARM101 base [0, 0, 0])
 WORKSPACE_SPEC: dict[str, Any] = {
-    "robot": "6-DoF SO-ARM101 (5 arm joints + marker held in gripper)",
+    "robot": "6-DoF SO-ARM101 (5 arm joints + gripper with 3-color marker dock)",
     "coordinate_frame": (
         "Right-handed 3D metric coordinates [X, Y, Z] in meters relative to robot base [0, 0, 0]. "
         "On the 2D canvas view: +X points UP (top of drawing, away from robot base), "
@@ -64,6 +88,9 @@ WORKSPACE_SPEC: dict[str, Any] = {
     "z_contact_threshold_m": 0.008,
     "z_up_m": 0.030,
     "z_collision_floor_m": 0.000,
+    "available_markers": list(AVAILABLE_MARKER_COLORS),
+    "default_marker_color": "black",
+    "marker_dock_slots_xyz_m": MARKER_DOCK_SLOTS_XYZ,
     "canvas_resolution_px": {"width": 1000, "height": 500},
     "ink_policy": "Additive and permanent. Once ink is drawn on the board, it cannot be erased.",
 }
@@ -172,6 +199,10 @@ class SO101WhiteboardEnv(ABC):
     @abstractmethod
     def move_to_home(self) -> None:
         """Retract arm smoothly to HOME_PROPRIO_6D so overhead camera has a clear view."""
+
+    @abstractmethod
+    def select_marker(self, color: str) -> dict[str, Any]:
+        """Move arm to the 3-slot marker dock, drop current marker, and pick up requested color."""
 
     @abstractmethod
     def execute_cartesian_path(

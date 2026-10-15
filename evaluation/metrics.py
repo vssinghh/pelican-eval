@@ -29,6 +29,8 @@ class EpisodeMetrics:
     prompt_tokens: int
     completion_tokens: int
     ink_pixels_drawn: int
+    colors_used: list[str]
+    marker_swaps: int
     finished_cleanly: bool
     canvas_path: str
     timelapse_path: str
@@ -81,6 +83,8 @@ def build_episode_metrics(
         prompt_tokens=run_res.prompt_tokens,
         completion_tokens=run_res.completion_tokens,
         ink_pixels_drawn=int(ink_pixels_drawn),
+        colors_used=list(run_res.colors_used),
+        marker_swaps=int(run_res.marker_swaps),
         finished_cleanly=run_res.finished_cleanly,
         canvas_path=canvas_rel_path,
         timelapse_path=timelapse_rel_path,

@@ -12,8 +12,15 @@ from PIL import Image, ImageDraw
 
 from envs.base import (
     ALL_JOINT_NAMES,
+    AVAILABLE_MARKER_COLORS,
     CAMERA_NAMES,
+    GRIPPER_NORM_GRASP,
+    GRIPPER_NORM_OPEN,
     HOME_PROPRIO_6D,
+    MARKER_COLORS_RGB,
+    MARKER_COLORS_RGBA,
+    MARKER_DOCK_HOVER_Z,
+    MARKER_DOCK_SLOTS_XYZ,
     WORKSPACE_SPEC,
     SO101WhiteboardEnv,
     is_xy_in_bounds,
@@ -26,9 +33,8 @@ from envs.trajectory import interpolate_waypoints_3d
 
 
 class SimWhiteboardEnv(SO101WhiteboardEnv):
-    """MuJoCo 500 Hz simulation environment with live contact ink rendering on a whiteboard."""
+    """MuJoCo 500 Hz simulation environment with live contact ink rendering and 3-slot marker dock."""
 
-    INK_COLOR_RGB: tuple[int, int, int] = (18, 42, 138)
     BG_COLOR_RGB: tuple[int, int, int] = (250, 250, 252)
 
     def __init__(
@@ -66,6 +72,22 @@ class SimWhiteboardEnv(SO101WhiteboardEnv):
         self._pen_tip_site_id = self.model.site("pen_tip").id
         self._whiteboard_tex_id = self.model.texture("whiteboard_tex").id
 
+        # Marker geom IDs for dynamic 3-color dock swaps
+        self._gripper_marker_geoms = [
+            self.model.geom(name).id
+            for name in ("marker_collar", "marker_barrel", "marker_cone", "marker_nib")
+        ]
+        self._gripper_ink_geoms = [
+            self.model.geom(name).id for name in ("marker_collar", "marker_cone", "marker_nib")
+        ]
+        self._dock_marker_geoms: dict[str, tuple[int, int]] = {
+            c: (
+                self.model.geom(f"dock_barrel_{c}").id,
+                self.model.geom(f"dock_cap_{c}").id,
+            )
+            for c in AVAILABLE_MARKER_COLORS
+        }
+
         # Dedicated IK solver sharing the loaded model
         self.ik_solver = SO101IKSolver(model=self.model, site_name="pen_tip")
 
@@ -76,6 +98,12 @@ class SimWhiteboardEnv(SO101WhiteboardEnv):
         self._canvas_draw = ImageDraw.Draw(self._canvas_pil)
         self._texture_dirty = True
         self._prev_contact_px: tuple[int, int] | None = None
+
+        # Active marker state
+        self.current_marker_color: str = str(WORKSPACE_SPEC["default_marker_color"])
+        self._holding_marker: bool = True
+        self.colors_used: set[str] = set()
+        self.marker_swaps: int = 0
 
         # Offscreen renderer (lazy-initialized)
         self._renderer: mujoco.Renderer | None = None
@@ -90,6 +118,28 @@ class SimWhiteboardEnv(SO101WhiteboardEnv):
         self._substep_counter: int = 0
 
         self.reset()
+
+    def _update_marker_visuals(self, held_color: str | None) -> None:
+        """Update 3D MuJoCo geom colors and dock visibility for the held marker vs docked markers."""
+        self._holding_marker = held_color is not None
+        if held_color is None:
+            for gid in self._gripper_marker_geoms:
+                self.model.geom_rgba[gid, 3] = 0.0
+            self.model.site_rgba[self._pen_tip_site_id, 3] = 0.0
+        else:
+            rgba = MARKER_COLORS_RGBA[held_color]
+            barrel_id = self.model.geom("marker_barrel").id
+            self.model.geom_rgba[barrel_id] = [0.92, 0.94, 0.96, 1.0]
+            for gid in self._gripper_ink_geoms:
+                self.model.geom_rgba[gid] = list(rgba)
+            self.model.site_rgba[self._pen_tip_site_id] = list(rgba)
+
+        for color_name, (barrel_gid, cap_gid) in self._dock_marker_geoms.items():
+            in_dock = color_name != held_color
+            alpha = 1.0 if in_dock else 0.0
+            self.model.geom_rgba[barrel_gid] = [0.92, 0.94, 0.96, alpha]
+            c_rgba = MARKER_COLORS_RGBA[color_name]
+            self.model.geom_rgba[cap_gid] = [c_rgba[0], c_rgba[1], c_rgba[2], alpha]
 
     def _ensure_renderer(self) -> mujoco.Renderer:
         """Create or return the MuJoCo offscreen renderer."""
@@ -126,6 +176,11 @@ class SimWhiteboardEnv(SO101WhiteboardEnv):
         self.data.qpos[self._qpos_adrs[5]] = g_raw
         self.data.ctrl[self._actuator_ids[5]] = g_raw
         self.data.qvel[:] = 0.0
+
+        self.current_marker_color = str(WORKSPACE_SPEC["default_marker_color"])
+        self.colors_used.clear()
+        self.marker_swaps = 0
+        self._update_marker_visuals(self.current_marker_color)
 
         mujoco.mj_forward(self.model, self.data)
 
@@ -166,6 +221,7 @@ class SimWhiteboardEnv(SO101WhiteboardEnv):
         self.data.ctrl[self._actuator_ids[5]] = norm_gripper_to_raw(float(act[5]))
 
         z_contact_thresh = float(WORKSPACE_SPEC["z_contact_threshold_m"])
+        active_ink_rgb = MARKER_COLORS_RGB[self.current_marker_color]
 
         for _ in range(self.substeps):
             mujoco.mj_step(self.model, self.data)
@@ -173,20 +229,23 @@ class SimWhiteboardEnv(SO101WhiteboardEnv):
 
             tip_xyz = self.data.site_xpos[self._pen_tip_site_id].copy()
             in_contact = bool(
-                tip_xyz[2] <= z_contact_thresh and is_xy_in_bounds(tip_xyz[0], tip_xyz[1], margin_m=0.002)
+                self._holding_marker
+                and tip_xyz[2] <= z_contact_thresh
+                and is_xy_in_bounds(tip_xyz[0], tip_xyz[1], margin_m=0.002)
             )
 
             if in_contact:
+                self.colors_used.add(self.current_marker_color)
                 row, col = xy_to_canvas_px(tip_xyz[0], tip_xyz[1], self.canvas_w, self.canvas_h)
                 if self._prev_contact_px is not None:
                     r0, c0 = self._prev_contact_px
                     if abs(row - r0) + abs(col - c0) <= 60:
-                        self._canvas_draw.line([(c0, r0), (col, row)], fill=self.INK_COLOR_RGB, width=5)
+                        self._canvas_draw.line([(c0, r0), (col, row)], fill=active_ink_rgb, width=5)
                         self.ink_pixels_drawn += max(1, int(np.hypot(row - r0, col - c0)))
                 else:
                     self._canvas_draw.ellipse(
                         [(col - 2, row - 2), (col + 2, row + 2)],
-                        fill=self.INK_COLOR_RGB,
+                        fill=active_ink_rgb,
                     )
                     self.ink_pixels_drawn += 1
                 self._prev_contact_px = (row, col)
@@ -208,6 +267,90 @@ class SimWhiteboardEnv(SO101WhiteboardEnv):
             self.ink_contact_500hz.append(in_contact)
 
         return self._get_fast_state()
+
+    def _move_tip_to_xyz(
+        self,
+        target_xyz: list[float] | np.ndarray,
+        gripper_norm: float,
+        step_size_m: float = 0.005,
+    ) -> float:
+        """Interpolate and track a 3D target point with a specified gripper state."""
+        cur_tip = self.data.site_xpos[self._pen_tip_site_id].copy()
+        pts = interpolate_waypoints_3d([cur_tip.tolist(), list(target_xyz)], step_size_m=step_size_m)
+        q_prev = np.array([self.data.qpos[adr] for adr in self._qpos_adrs[:5]], dtype=np.float32)
+        max_err = 0.0
+        for pt in pts:
+            res = self.ik_solver.solve(pt, q_init=q_prev, gripper_norm=gripper_norm)
+            q_prev = res.q_5d
+            max_err = max(max_err, res.pos_error_m)
+            self.step(res.action_6d)
+        return max_err
+
+    def select_marker(self, color: str) -> dict[str, Any]:
+        """Move arm to the 3-slot marker dock, drop current marker, and pick up requested color."""
+        target_color = str(color).strip().lower()
+        if target_color not in AVAILABLE_MARKER_COLORS:
+            raise ValueError(
+                f"Invalid marker color '{color}'. Available colors: {list(AVAILABLE_MARKER_COLORS)}"
+            )
+
+        if target_color == self.current_marker_color:
+            return {
+                "swapped": False,
+                "previous_color": self.current_marker_color,
+                "active_color": self.current_marker_color,
+                "marker_swaps": self.marker_swaps,
+                "colors_used": sorted(self.colors_used),
+            }
+
+        prev_color = self.current_marker_color
+        old_slot = MARKER_DOCK_SLOTS_XYZ[prev_color]
+        new_slot = MARKER_DOCK_SLOTS_XYZ[target_color]
+        z_hover = float(MARKER_DOCK_HOVER_Z)
+
+        # 1. Lift vertically from current position to safe dock hover height
+        cur_tip = self.data.site_xpos[self._pen_tip_site_id].copy()
+        self._move_tip_to_xyz([float(cur_tip[0]), float(cur_tip[1]), z_hover], GRIPPER_NORM_GRASP)
+
+        # 2. Move above old marker slot and lower into slot
+        self._move_tip_to_xyz([old_slot[0], old_slot[1], z_hover], GRIPPER_NORM_GRASP)
+        self._move_tip_to_xyz(old_slot, GRIPPER_NORM_GRASP, step_size_m=0.003)
+
+        # 3. Open gripper to release old marker into its slot
+        q_cur5 = np.array([self.data.qpos[adr] for adr in self._qpos_adrs[:5]], dtype=np.float32)
+        open_act = np.concatenate([q_cur5, np.array([GRIPPER_NORM_OPEN], dtype=np.float32)])
+        for _ in range(4):
+            self.step(open_act)
+        self._update_marker_visuals(None)
+        if self.record_timelapse:
+            self.timelapse_frames.append(self._make_timelapse_frame(self.get_obs()))
+
+        # 4. Lift above old slot, traverse to new marker slot, and lower onto new marker
+        self._move_tip_to_xyz([old_slot[0], old_slot[1], z_hover], GRIPPER_NORM_OPEN, step_size_m=0.004)
+        self._move_tip_to_xyz([new_slot[0], new_slot[1], z_hover], GRIPPER_NORM_OPEN)
+        self._move_tip_to_xyz(new_slot, GRIPPER_NORM_OPEN, step_size_m=0.003)
+
+        # 5. Close gripper to grasp new marker and lift to hover height
+        q_new5 = np.array([self.data.qpos[adr] for adr in self._qpos_adrs[:5]], dtype=np.float32)
+        grasp_act = np.concatenate([q_new5, np.array([GRIPPER_NORM_GRASP], dtype=np.float32)])
+        self.current_marker_color = target_color
+        self._update_marker_visuals(target_color)
+        for _ in range(4):
+            self.step(grasp_act)
+        if self.record_timelapse:
+            self.timelapse_frames.append(self._make_timelapse_frame(self.get_obs()))
+
+        self._move_tip_to_xyz([new_slot[0], new_slot[1], z_hover], GRIPPER_NORM_GRASP, step_size_m=0.004)
+        self.marker_swaps += 1
+
+        return {
+            "swapped": True,
+            "previous_color": prev_color,
+            "active_color": self.current_marker_color,
+            "dock_slot_xyz_m": new_slot,
+            "marker_swaps": self.marker_swaps,
+            "colors_used": sorted(self.colors_used),
+        }
 
     def move_to_home(self) -> None:
         """Lift marker vertically to safe height first, then retract smoothly to HOME_PROPRIO_6D."""
@@ -395,6 +538,9 @@ class SimWhiteboardEnv(SO101WhiteboardEnv):
             "proprio": self._read_proprio_6d(),
             "pen_tip_xyz": self.data.site_xpos[self._pen_tip_site_id].copy().astype(np.float32),
             "ink_pixels_drawn": self.ink_pixels_drawn,
+            "active_marker_color": self.current_marker_color,
+            "colors_used": sorted(self.colors_used),
+            "marker_swaps": self.marker_swaps,
         }
 
     def get_obs(self) -> dict[str, Any]:

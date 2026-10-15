@@ -133,9 +133,14 @@ uv run python -m evaluation -d real -p /dev/tty.usbmodem5B790143431 -m anthropic
 Both `SimWhiteboardEnv` and `RealWhiteboardEnv` use the same 3D coordinate system in **meters**:
 * **`X` (Up / Down on the canvas)**: `0.160 m` (bottom edge, closest to robot base) to `0.300 m` (top edge, furthest from robot base). Total height is `14 cm`, centered at `X = 0.230 m`.
 * **`Y` (Left / Right on the canvas)**: `+0.140 m` (left edge) to `-0.140 m` (right edge). Total width is `28 cm`, centered at `Y = 0.000 m`.
-* **`Z_draw = 0.005 m`**: Whiteboard surface height. Whenever the marker tip is at `Z <= 0.008 m`, it leaves blue ink on the board.
+* **`Z_draw = 0.005 m`**: Whiteboard surface height. Whenever the marker tip is at `Z <= 0.008 m`, it leaves ink on the board in the currently held marker color (`black`, `blue`, or `red`).
 * **`Z_up = 0.030 m`**: Safe travel height (`2.5 cm` above the board) to move between strokes without drawing ink.
 * **`Z < 0.000 m`**: Table crash floor. Commanding `Z < 0.000 m` counts as a spatial hallucination and is clamped to `0.002 m`.
+* **3-Slot Marker Stand (`Y = -0.175 m`)**: Sits on the desk beside the right edge of the whiteboard with three vertical slots:
+  - **`black` slot**: `[0.170, -0.175, 0.015]` m
+  - **`blue` slot**: `[0.210, -0.175, 0.015]` m
+  - **`red` slot**: `[0.250, -0.175, 0.015]` m
+  When a model switches colors, the robot arm lifts to `Z = 0.055 m`, moves to the current marker's slot, opens the gripper (`q5 = 0.65`) to drop the marker back into the stand, moves to the new color's slot, closes the gripper (`q5 = 0.15`) to grab the new marker, and lifts back up.
 
 ### 4.2 Inverse Kinematics (`envs/ik_solver.py`)
 1. **What is it?**
@@ -145,19 +150,19 @@ Both `SimWhiteboardEnv` and `RealWhiteboardEnv` use the same 3D coordinate syste
 3. **How do we use it?**
    At each `2.5 mm` step along a stroke, `SO101IKSolver` measures the 3D position error $\mathbf{e}$ between the target `[X, Y, Z]` and the current `pen_tip` position, and updates the joints using Damped Least-Squares:
    $$\Delta \mathbf{q} = \mathbf{J}^T (\mathbf{J} \mathbf{J}^T + \lambda^2 \mathbf{I})^{-1} \mathbf{e}$$
-   Across the entire `14 cm x 28 cm` whiteboard, this keeps tracking error below `0.15 mm`.
+   Across the entire `14 cm x 28 cm` whiteboard and the 3-slot marker dock, this keeps tracking error below `0.15 mm`.
 4. **Where is it used in the real world?**
    Every industrial robot controller (FANUC, KUKA, Franka, Universal Robots) and simulation stack (MuJoCo, Drake, Isaac Lab) uses damped Jacobian IK to track smooth tool paths.
 
 ### 4.3 How Drawing Works in MuJoCo (`envs/sim_env.py`)
 * The physics engine runs at **`500 Hz`** (`1` step every `2 ms`).
-* At every `2 ms` physics step, `SimWhiteboardEnv` checks the 3D position of the `pen_tip` site at the end of the marker.
-* If `Z <= 0.008 m`, it maps `(X, Y)` to a pixel `(row, col)` on a `1000 x 500` image buffer and draws a blue line from the previous contact point.
-* It uploads that updated image buffer into MuJoCo's `whiteboard_tex` texture so the simulated `overhead_cam` and `third_person_cam` see the drawn ink live on the 3D whiteboard.
+* At every `2 ms` physics step, `SimWhiteboardEnv` checks the 3D position of the `pen_tip` site at the end of the held marker.
+* If `Z <= 0.008 m`, it maps `(X, Y)` to a pixel `(row, col)` on a `1000 x 500` image buffer and draws a line in the active marker color (`black`, `blue`, or `red`) from the previous contact point.
+* It uploads that updated image buffer into MuJoCo's `whiteboard_tex` texture so the simulated `overhead_cam` and `third_person_cam` see the multi-color ink live on the 3D whiteboard.
 
 ### 4.4 Real Whiteboard 4-Corner Calibration (`envs/calibrate_board.py`)
 1. **What is it?**
-   A one-time setup script that measures the exact tilt of your physical desk and whiteboard by having you touch the marker tip to the 4 corners of the board.
+   A one-time setup script that measures the exact tilt of your physical desk and whiteboard by having you touch the marker tip to the 4 corners of the board (and optionally record the 3 marker stand slots).
 2. **Why do we use it?**
    Real desks are rarely flat to the millimeter. If one side of the whiteboard is `3 mm` higher than the other, a fixed height of `Z = 0.005 m` will press too hard on one side and float in the air (leaving no ink) on the other side.
 3. **How do we use it?**
@@ -169,16 +174,17 @@ Both `SimWhiteboardEnv` and `RealWhiteboardEnv` use the same 3D coordinate syste
 
 ***
 
-## 5. The 6 Robot Tools (`harness/tools.py`)
+## 5. The 7 Robot Tools (`harness/tools.py`)
 
-Every model can call these 6 tools in any order (up to `max_turns = 10` turns):
+Every model can call these 7 tools in any order (up to `max_turns = 10` turns):
 
 | Tool | Input | What It Does & What Counts as a Hallucination |
 | :- | :- | :- |
-| **`get_workspace_spec`** | `{}` | Returns the whiteboard `[X, Y, Z]` bounds in meters, coordinate directions (`+X` is up, `+Y` is left), and current marker position. |
-| **`draw_primitives`** | `strokes: list[dict]` | Draws 2D shapes in meters (`line`, `polyline`, `circle`, `arc`, `ellipse`, `bezier`). Automatically lifts to `z_up` before and after each shape. Logs a **Spatial Hallucination** if any point falls outside the board. |
-| **`draw_waypoints`** | `waypoints_xyz: list[[x, y, z]]` | Moves the marker through an explicit list of 3D `[X, Y, Z]` coordinates. Logs a **Spatial Hallucination** if a point is out of bounds, hits the table (`Z < 0`), or stays in the air the whole time (`0` ink drawn). |
-| **`run_python`** | `code: str` | Runs custom Python math using `np` (`numpy`), `math`, `WORKSPACE_SPEC`, `draw_primitives`, and `draw_waypoints`. Logs a **Code Hallucination** if the code has a syntax/runtime error or tries to import blocked modules (`os`, `sys`, `subprocess`, `open`). |
+| **`get_workspace_spec`** | `{}` | Returns the whiteboard `[X, Y, Z]` bounds in meters, available marker colors (`black`, `blue`, `red`), 3-slot dock coordinates, and current marker position. |
+| **`select_marker`** | `color: 'black' \| 'blue' \| 'red'` | Moves the robot arm to the 3-slot stand, opens the gripper to return the current marker to its slot, and picks up the requested color. Logs a **Code Hallucination** if an invalid color name is given. |
+| **`draw_primitives`** | `strokes: list[dict], color?: str` | Draws 2D shapes in meters (`line`, `polyline`, `circle`, `arc`, `ellipse`, `bezier`). Each stroke can also specify `'color': 'black' \| 'blue' \| 'red'` to trigger a marker swap at the dock. Logs a **Spatial Hallucination** if any point falls outside the board. |
+| **`draw_waypoints`** | `waypoints_xyz: list[[x, y, z]], color?: str` | Moves the marker through an explicit list of 3D `[X, Y, Z]` coordinates. Logs a **Spatial Hallucination** if a point is out of bounds, hits the table (`Z < 0`), or stays in the air the whole time (`0` ink drawn). |
+| **`run_python`** | `code: str` | Runs custom Python math using `np` (`numpy`), `math`, `WORKSPACE_SPEC`, `select_marker`, `draw_primitives`, and `draw_waypoints`. Logs a **Code Hallucination** if the code has a syntax/runtime error or tries to import blocked modules (`os`, `sys`, `subprocess`, `open`). |
 | **`inspect_canvas`** | `{}` | Moves the arm out of the way and returns 2 PNG images to the model: (1) the 2D whiteboard with metric `X/Y` rulers along the edges, and (2) the 3D overhead camera view. |
 | **`finish_drawing`** | `summary: str` | Parks the arm at home, stops the timer, and scores the final drawing. |
 

@@ -63,3 +63,43 @@ print("Drew pixels:", stats["ink_pixels_added"])
         assert belt.finished
     finally:
         env.close()
+
+
+def test_three_color_marker_dock_swaps() -> None:
+    """Verify autonomous 3-slot marker dock swaps ('black', 'blue', 'red') and invalid color hallucinations."""
+    env = SimWhiteboardEnv(record_timelapse=False)
+    try:
+        belt = WhiteboardToolBelt(env)
+        assert env.current_marker_color == "black"
+
+        # 1. Swap to red marker via select_marker tool
+        res_red = belt.dispatch("select_marker", {"color": "red"})
+        red_data = json.loads(res_red.response_json)
+        assert red_data["status"] == "ok"
+        assert red_data["swapped"] is True
+        assert red_data["active_color"] == "red"
+        assert env.marker_swaps == 1
+
+        # 2. Draw strokes with per-stroke color ('red' then 'blue')
+        res_draw = belt.dispatch(
+            "draw_primitives",
+            {
+                "strokes": [
+                    {"type": "line", "from_xy": [0.20, -0.05], "to_xy": [0.24, -0.05], "color": "red"},
+                    {"type": "line", "from_xy": [0.20, 0.05], "to_xy": [0.24, 0.05], "color": "blue"},
+                ]
+            },
+        )
+        draw_data = json.loads(res_draw.response_json)
+        assert draw_data["status"] == "ok"
+        assert draw_data["active_marker_color"] == "blue"
+        assert set(draw_data["colors_used"]) == {"red", "blue"}
+        assert env.marker_swaps == 2
+
+        # 3. Invalid marker color increments code_hallucinations
+        res_bad = belt.dispatch("select_marker", {"color": "purple"})
+        bad_data = json.loads(res_bad.response_json)
+        assert bad_data["status"] == "error"
+        assert belt.code_hallucinations == 1
+    finally:
+        env.close()

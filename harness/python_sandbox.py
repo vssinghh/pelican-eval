@@ -109,10 +109,12 @@ class RestrictedPythonSandbox:
     def __init__(
         self,
         draw_primitives_fn: Callable[[list[dict[str, Any]]], dict[str, Any]],
-        draw_waypoints_fn: Callable[[list[list[float]] | np.ndarray], dict[str, Any]],
+        draw_waypoints_fn: Callable[..., dict[str, Any]],
+        select_marker_fn: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self._draw_primitives_fn = draw_primitives_fn
         self._draw_waypoints_fn = draw_waypoints_fn
+        self._select_marker_fn = select_marker_fn
 
     def run(self, code: str) -> SandboxExecutionResult:
         """Validate and execute user/LLM Python code and return telemetry."""
@@ -133,14 +135,24 @@ class RestrictedPythonSandbox:
             warnings.extend(res.get("warnings", []))
             return res
 
-        def _wrapped_draw_waypoints(waypoints_xyz: list[list[float]] | np.ndarray) -> dict[str, Any]:
+        def _wrapped_draw_waypoints(
+            waypoints_xyz: list[list[float]] | np.ndarray,
+            color: str | None = None,
+        ) -> dict[str, Any]:
             nonlocal waypoints_executed, ink_pixels_added, spatial_hallucinations
+            if color is not None and self._select_marker_fn is not None:
+                self._select_marker_fn(str(color))
             res = self._draw_waypoints_fn(waypoints_xyz)
             waypoints_executed += int(res.get("waypoints_commanded", 0))
             ink_pixels_added += int(res.get("ink_pixels_added", 0))
             spatial_hallucinations += int(res.get("spatial_hallucinations", 0))
             warnings.extend(res.get("warnings", []))
             return res
+
+        def _wrapped_select_marker(color: str) -> dict[str, Any]:
+            if self._select_marker_fn is None:
+                return {"swapped": False, "active_color": str(color)}
+            return self._select_marker_fn(str(color))
 
         safe_builtins: dict[str, Any] = {
             "abs": abs,
@@ -181,6 +193,7 @@ class RestrictedPythonSandbox:
             "WORKSPACE_SPEC": dict(WORKSPACE_SPEC),
             "draw_primitives": _wrapped_draw_primitives,
             "draw_waypoints": _wrapped_draw_waypoints,
+            "select_marker": _wrapped_select_marker,
         }
 
         try:

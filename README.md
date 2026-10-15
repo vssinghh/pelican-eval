@@ -1,10 +1,10 @@
 # PelicanBench (`pelican-eval`)
 
-**PelicanBench** tests how well AI models (`Claude`, `Gemini`, `GPT`, `DeepSeek`, `Qwen`) control a 6-DoF **SO-ARM101** robot arm (`5` arm joints + `1` gripper holding a marker) to draw a **pelican riding a bicycle** on a whiteboard.
+**PelicanBench** tests how well AI models (`Claude`, `Gemini`, `GPT`, `DeepSeek`, `Qwen`) control a 6-DoF **SO-ARM101** robot arm (`5` arm joints + `1` gripper) to draw a **pelican riding a bicycle** on a whiteboard using a 3-slot marker stand (**`black`**, **`blue`**, and **`red`**).
 
-Every model gets the exact same prompt and the same 6 tools across two levels:
-1. **Level 1 (`sim`)**: Draw on a virtual whiteboard in **MuJoCo** (`500 Hz` physics simulation).
-2. **Level 2 (`real`)**: Draw on a physical whiteboard using a real **SO-ARM101** robot arm and marker.
+Every model gets the exact same prompt and the same 7 tools across two levels:
+1. **Level 1 (`sim`)**: Draw on a virtual whiteboard in **MuJoCo** (`500 Hz` physics simulation) with a 3-slot marker stand beside the board.
+2. **Level 2 (`real`)**: Draw on a physical whiteboard using a real **SO-ARM101** robot arm and a 3-slot marker stand.
 
 ***
 
@@ -12,8 +12,8 @@ Every model gets the exact same prompt and the same 6 tools across two levels:
 
 | Level | Flag | Environment | What It Does |
 | :-: | :- | :- | :- |
-| **`Level 1`** | `-d sim` | MuJoCo `500 Hz` simulation (`assets/so101/whiteboard_scene.xml`) | Runs the simulated SO-ARM101 arm, tracks errors, and saves the drawing and trajectory data |
-| **`Level 2`** | `-d real` | Physical **SO-ARM101** arm + whiteboard + marker | Runs the same model and tool calls on the real robot arm over USB |
+| **`Level 1`** | `-d sim` | MuJoCo `500 Hz` simulation (`assets/so101/whiteboard_scene.xml`) | Runs the simulated SO-ARM101 arm, picks up `black`, `blue`, or `red` markers from the dock, tracks errors, and saves the drawing |
+| **`Level 2`** | `-d real` | Physical **SO-ARM101** arm + whiteboard + 3-slot marker stand | Runs the same model and tool calls on the real robot arm over USB |
 
 ***
 

@@ -38,6 +38,8 @@ class AgentRunResult:
     turns_used: int
     finished_cleanly: bool
     finish_summary: str
+    colors_used: list[str] = field(default_factory=list)
+    marker_swaps: int = 0
     hallucination_log: list[str] = field(default_factory=list)
     transcript: list[dict[str, Any]] = field(default_factory=list)
 
@@ -220,6 +222,7 @@ class PelicanAgentRunner:
             env.move_to_home()
 
         e2e_time_s = time.perf_counter() - t_start
+        final_obs = env.get_obs()
         return AgentRunResult(
             model=self.model,
             domain=domain,
@@ -235,6 +238,8 @@ class PelicanAgentRunner:
             turns_used=turns_used,
             finished_cleanly=belt.finished,
             finish_summary=belt.finish_summary,
+            colors_used=list(final_obs.get("colors_used", [])),
+            marker_swaps=int(final_obs.get("marker_swaps", 0)),
             hallucination_log=list(belt.hallucination_log),
             transcript=transcript,
         )
@@ -246,16 +251,16 @@ class PelicanAgentRunner:
         domain: str,
         t_start: float,
     ) -> AgentRunResult:
-        """Execute a deterministic 4-call reference trajectory through the exact tool belt."""
+        """Execute a deterministic 5-call 3-color reference trajectory through the exact tool belt."""
         strokes = get_reference_pelican_strokes()
         calls = [
             ("get_workspace_spec", {}),
-            ("draw_primitives", {"strokes": strokes[:9]}),
+            ("draw_primitives", {"strokes": strokes[:14]}),
             ("inspect_canvas", {}),
-            ("draw_primitives", {"strokes": strokes[9:]}),
+            ("draw_primitives", {"strokes": strokes[14:]}),
             (
                 "finish_drawing",
-                {"summary": "Completed reference pelican riding a bicycle across 20 strokes."},
+                {"summary": "Completed 3-color reference pelican riding a bicycle across 20 strokes."},
             ),
         ]
         for idx, (t_name, t_args) in enumerate(calls):
@@ -275,6 +280,7 @@ class PelicanAgentRunner:
             )
 
         e2e_time_s = time.perf_counter() - t_start
+        final_obs = belt.env.get_obs()
         return AgentRunResult(
             model=self.model,
             domain=domain,
@@ -290,6 +296,8 @@ class PelicanAgentRunner:
             turns_used=len(calls),
             finished_cleanly=belt.finished,
             finish_summary=belt.finish_summary,
+            colors_used=list(final_obs.get("colors_used", [])),
+            marker_swaps=int(final_obs.get("marker_swaps", 0)),
             hallucination_log=list(belt.hallucination_log),
             transcript=transcript,
         )

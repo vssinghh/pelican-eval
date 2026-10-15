@@ -53,8 +53,8 @@ class VisualJudge:
         - Cols 0..999 map Y from +0.140m (left) to -0.140m (right).
         """
         arr = np.asarray(canvas_rgb, dtype=np.int32)
-        # Ink mask: pixels significantly darker than background [250, 250, 252]
-        ink_mask = (arr[:, :, 0] < 180) | (arr[:, :, 1] < 180)
+        # Ink mask: pixels significantly darker than background [250, 250, 252] in any RGB channel
+        ink_mask = (arr[:, :, 0] < 215) | (arr[:, :, 1] < 215) | (arr[:, :, 2] < 215)
         total_ink = int(np.sum(ink_mask))
 
         if total_ink < 150:

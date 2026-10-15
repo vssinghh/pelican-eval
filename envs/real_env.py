@@ -11,8 +11,14 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from envs.base import (
+    AVAILABLE_MARKER_COLORS,
     CAMERA_NAMES,
+    GRIPPER_NORM_GRASP,
+    GRIPPER_NORM_OPEN,
     HOME_PROPRIO_6D,
+    MARKER_COLORS_RGB,
+    MARKER_DOCK_HOVER_Z,
+    MARKER_DOCK_SLOTS_XYZ,
     STS3215_CENTER_TICK,
     WORKSPACE_SPEC,
     SO101WhiteboardEnv,
@@ -28,9 +34,8 @@ from envs.trajectory import interpolate_waypoints_3d
 
 
 class RealWhiteboardEnv(SO101WhiteboardEnv):
-    """Physical SO-ARM101 environment matching SimWhiteboardEnv's exact API and coordinate space."""
+    """Physical SO-ARM101 environment matching SimWhiteboardEnv's exact API and 3-slot marker dock."""
 
-    INK_COLOR_RGB: tuple[int, int, int] = (18, 42, 138)
     BG_COLOR_RGB: tuple[int, int, int] = (250, 250, 252)
 
     def __init__(
@@ -62,6 +67,9 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
             repo_root = Path(__file__).resolve().parent.parent
             calibration_path = repo_root / "config" / "calibration.json"
         self.calibration_path = Path(calibration_path)
+        self.marker_slots_xyz: dict[str, list[float]] = {
+            k: list(v) for k, v in MARKER_DOCK_SLOTS_XYZ.items()
+        }
         self.plane_coeffs: tuple[float, float, float] = self._load_calibration()
 
         self.ik_solver = SO101IKSolver(site_name="pen_tip")
@@ -71,6 +79,11 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         self._canvas_pil = Image.new("RGB", (self.canvas_w, self.canvas_h), self.BG_COLOR_RGB)
         self._canvas_draw = ImageDraw.Draw(self._canvas_pil)
         self._prev_contact_px: tuple[int, int] | None = None
+
+        self.current_marker_color: str = str(WORKSPACE_SPEC["default_marker_color"])
+        self._holding_marker: bool = True
+        self.colors_used: set[str] = set()
+        self.marker_swaps: int = 0
 
         self._mock_proprio = HOME_PROPRIO_6D.copy()
         self._port_handler: Any = None
@@ -87,10 +100,14 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
             self._connect_hardware()
 
     def _load_calibration(self) -> tuple[float, float, float]:
-        """Load 4-corner plane fit Z_board(X, Y) = a*X + b*Y + c from config/calibration.json."""
+        """Load 4-corner plane fit and optional 3-slot marker dock coordinates from calibration.json."""
         if self.calibration_path.exists():
             with open(self.calibration_path, encoding="utf-8") as f:
                 data = json.load(f)
+            if "marker_slots_xyz" in data and isinstance(data["marker_slots_xyz"], dict):
+                for color_key, pt in data["marker_slots_xyz"].items():
+                    if color_key in self.marker_slots_xyz and len(pt) == 3:
+                        self.marker_slots_xyz[color_key] = [float(pt[0]), float(pt[1]), float(pt[2])]
             coeffs = data.get("plane_coeffs_abc", [0.0, 0.0, float(WORKSPACE_SPEC["z_draw_m"])])
             return (float(coeffs[0]), float(coeffs[1]), float(coeffs[2]))
         return (0.0, 0.0, float(WORKSPACE_SPEC["z_draw_m"]))
@@ -167,6 +184,11 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         self._canvas_pil = Image.new("RGB", (self.canvas_w, self.canvas_h), self.BG_COLOR_RGB)
         self._canvas_draw = ImageDraw.Draw(self._canvas_pil)
         self._prev_contact_px = None
+        self.current_marker_color = str(WORKSPACE_SPEC["default_marker_color"])
+        self._holding_marker = True
+        self.colors_used.clear()
+        self.marker_swaps = 0
+
         self.qpos_log.clear()
         self.pen_tip_xyz_log.clear()
         self.ink_contact_log.clear()
@@ -194,20 +216,24 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         proprio = self._read_proprio_6d()
         tip_xyz = self.ik_solver.forward_kinematics(proprio[:5])
         z_contact_thresh = float(WORKSPACE_SPEC["z_contact_threshold_m"])
+        active_ink_rgb = MARKER_COLORS_RGB[self.current_marker_color]
         in_contact = bool(
-            tip_xyz[2] <= z_contact_thresh and is_xy_in_bounds(tip_xyz[0], tip_xyz[1], margin_m=0.003)
+            self._holding_marker
+            and tip_xyz[2] <= z_contact_thresh
+            and is_xy_in_bounds(tip_xyz[0], tip_xyz[1], margin_m=0.003)
         )
 
         if in_contact:
+            self.colors_used.add(self.current_marker_color)
             row, col = xy_to_canvas_px(tip_xyz[0], tip_xyz[1], self.canvas_w, self.canvas_h)
             if self._prev_contact_px is not None:
                 r0, c0 = self._prev_contact_px
-                self._canvas_draw.line([(c0, r0), (col, row)], fill=self.INK_COLOR_RGB, width=4)
+                self._canvas_draw.line([(c0, r0), (col, row)], fill=active_ink_rgb, width=4)
                 self.ink_pixels_drawn += max(1, int(np.hypot(row - r0, col - c0)))
             else:
                 self._canvas_draw.ellipse(
                     [(col - 2, row - 2), (col + 2, row + 2)],
-                    fill=self.INK_COLOR_RGB,
+                    fill=active_ink_rgb,
                 )
                 self.ink_pixels_drawn += 1
             self._prev_contact_px = (row, col)
@@ -222,6 +248,87 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
             "proprio": proprio,
             "pen_tip_xyz": tip_xyz.astype(np.float32),
             "ink_pixels_drawn": self.ink_pixels_drawn,
+            "active_marker_color": self.current_marker_color,
+            "colors_used": sorted(self.colors_used),
+            "marker_swaps": self.marker_swaps,
+        }
+
+    def _move_tip_to_xyz(
+        self,
+        target_xyz: list[float] | np.ndarray,
+        gripper_norm: float,
+        step_size_m: float = 0.006,
+    ) -> None:
+        """Interpolate and track a 3D target point with a specified gripper state on hardware."""
+        proprio = self._read_proprio_6d()
+        cur_tip = self.ik_solver.forward_kinematics(proprio[:5])
+        pts = interpolate_waypoints_3d([cur_tip.tolist(), list(target_xyz)], step_size_m=step_size_m)
+        q_prev = proprio[:5]
+        for pt in pts:
+            cal_pt = self.apply_plane_calibration(pt)
+            res = self.ik_solver.solve(cal_pt, q_init=q_prev, gripper_norm=gripper_norm)
+            q_prev = res.q_5d
+            self.step(res.action_6d)
+
+    def select_marker(self, color: str) -> dict[str, Any]:
+        """Move physical arm to the 3-slot marker dock, drop current marker, and pick up requested color."""
+        target_color = str(color).strip().lower()
+        if target_color not in AVAILABLE_MARKER_COLORS:
+            raise ValueError(
+                f"Invalid marker color '{color}'. Available colors: {list(AVAILABLE_MARKER_COLORS)}"
+            )
+
+        if target_color == self.current_marker_color:
+            return {
+                "swapped": False,
+                "previous_color": self.current_marker_color,
+                "active_color": self.current_marker_color,
+                "marker_swaps": self.marker_swaps,
+                "colors_used": sorted(self.colors_used),
+            }
+
+        prev_color = self.current_marker_color
+        old_slot = self.marker_slots_xyz[prev_color]
+        new_slot = self.marker_slots_xyz[target_color]
+        z_hover = float(MARKER_DOCK_HOVER_Z)
+
+        # 1. Lift vertically from current position to safe dock hover height
+        proprio = self._read_proprio_6d()
+        cur_tip = self.ik_solver.forward_kinematics(proprio[:5])
+        self._move_tip_to_xyz([float(cur_tip[0]), float(cur_tip[1]), z_hover], GRIPPER_NORM_GRASP)
+
+        # 2. Move above old marker slot, lower into slot, and open gripper to release
+        self._move_tip_to_xyz([old_slot[0], old_slot[1], z_hover], GRIPPER_NORM_GRASP)
+        self._move_tip_to_xyz(old_slot, GRIPPER_NORM_GRASP, step_size_m=0.004)
+        q_cur = self._read_proprio_6d()
+        q_cur[5] = GRIPPER_NORM_OPEN
+        self._holding_marker = False
+        for _ in range(3):
+            self.step(q_cur)
+
+        # 3. Lift above old slot, traverse to new marker slot, and lower onto new marker
+        self._move_tip_to_xyz([old_slot[0], old_slot[1], z_hover], GRIPPER_NORM_OPEN)
+        self._move_tip_to_xyz([new_slot[0], new_slot[1], z_hover], GRIPPER_NORM_OPEN)
+        self._move_tip_to_xyz(new_slot, GRIPPER_NORM_OPEN, step_size_m=0.004)
+
+        # 4. Close gripper to grasp new marker and lift to hover height
+        q_new = self._read_proprio_6d()
+        q_new[5] = GRIPPER_NORM_GRASP
+        self.current_marker_color = target_color
+        self._holding_marker = True
+        for _ in range(3):
+            self.step(q_new)
+
+        self._move_tip_to_xyz([new_slot[0], new_slot[1], z_hover], GRIPPER_NORM_GRASP)
+        self.marker_swaps += 1
+
+        return {
+            "swapped": True,
+            "previous_color": prev_color,
+            "active_color": self.current_marker_color,
+            "dock_slot_xyz_m": new_slot,
+            "marker_swaps": self.marker_swaps,
+            "colors_used": sorted(self.colors_used),
         }
 
     def move_to_home(self) -> None:
@@ -339,6 +446,9 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
             "proprio": proprio,
             "pen_tip_xyz": tip_xyz.astype(np.float32),
             "ink_pixels_drawn": self.ink_pixels_drawn,
+            "active_marker_color": self.current_marker_color,
+            "colors_used": sorted(self.colors_used),
+            "marker_swaps": self.marker_swaps,
             "canvas_rgb": canvas_np,
             "canvas_annotated_rgb": annotated_np,
         }
