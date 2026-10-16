@@ -1,0 +1,44 @@
+{
+  "model": "gemini/gemini-4-argon",
+  "provider": "Google",
+  "domain": "sim",
+  "seed": 0,
+  "total_hallucinations": 0,
+  "spatial_hallucinations": 0,
+  "code_hallucinations": 0,
+  "total_tool_calls": 8,
+  "tool_call_counts": {
+    "get_workspace_detail": 3,
+    "select_marker": 0,
+    "draw_primitives": 1,
+    "draw_waypoints": 0,
+    "run_python": 3,
+    "finish_drawing": 1
+  },
+  "e2e_time_s": 153.848,
+  "cost_usd": 0.143766,
+  "visual_score": 10.0,
+  "visual_breakdown": {
+    "wheels_score": 2.0,
+    "bicycle_frame_score": 2.0,
+    "pelican_head_beak_score": 2.0,
+    "pelican_body_limbs_score": 2.0,
+    "riding_composition_score": 2.0,
+    "total_score": 10.0,
+    "evaluator_type": "deterministic_spatial",
+    "rationale": "Total ink=64007px (wheels=20434+15230px, frame=25934px, body=18186px, head_beak=16320px)."
+  },
+  "prompt_tokens": 90651,
+  "completion_tokens": 8684,
+  "ink_pixels_drawn": 62544,
+  "colors_used": [
+    "black",
+    "blue",
+    "red"
+  ],
+  "marker_swaps": 2,
+  "finished_cleanly": true,
+  "canvas_path": "gemini_gemini_4_argon_seed0/overhead_final.png",
+  "timelapse_path": "gemini_gemini_4_argon_seed0/timelapse.gif",
+  "total_tokens": 99335
+}

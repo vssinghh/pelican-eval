@@ -8,14 +8,14 @@
   "code_hallucinations": 0,
   "total_tool_calls": 5,
   "tool_call_counts": {
-    "get_workspace_spec": 1,
+    "get_workspace_detail": 2,
+    "select_marker": 0,
     "draw_primitives": 2,
     "draw_waypoints": 0,
     "run_python": 0,
-    "inspect_canvas": 1,
     "finish_drawing": 1
   },
-  "e2e_time_s": 1.374,
+  "e2e_time_s": 2.128,
   "cost_usd": 0.0,
   "visual_score": 10.0,
   "visual_breakdown": {
@@ -31,7 +31,14 @@
   "prompt_tokens": 0,
   "completion_tokens": 0,
   "ink_pixels_drawn": 16927,
+  "colors_used": [
+    "black",
+    "blue",
+    "red"
+  ],
+  "marker_swaps": 2,
   "finished_cleanly": true,
-  "canvas_path": "reference_expert_seed0/canvas_final.png",
-  "timelapse_path": "reference_expert_seed0/timelapse.gif"
+  "canvas_path": "reference_expert_seed0/overhead_final.png",
+  "timelapse_path": "reference_expert_seed0/timelapse.gif",
+  "total_tokens": 0
 }

@@ -104,9 +104,10 @@ class PelicanAgentRunner:
                 "tool_choice": "auto",
                 "timeout": self.timeout_s,
             }
-            # Reasoning models and Gemini 3+ models disallow or deprecate custom temperature
+            # Reasoning models and Gemini 3+/4+ models disallow or deprecate custom temperature
             if not any(
-                tag in self.model.lower() for tag in ("o1", "o3", "o4", "reasoner", "gemini-3")
+                tag in self.model.lower()
+                for tag in ("o1", "o3", "o4", "reasoner", "gemini-3", "gemini-4")
             ):
                 completion_kwargs["temperature"] = self.temperature
 

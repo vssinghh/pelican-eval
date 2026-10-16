@@ -3,30 +3,30 @@
   "domain": "sim",
   "turns_used": 5,
   "finished_cleanly": true,
-  "finish_summary": "Completed reference pelican riding a bicycle across 20 strokes.",
+  "finish_summary": "Completed 3-color reference pelican riding a bicycle across 20 strokes.",
   "hallucination_log": [],
   "messages": [
     {
       "role": "system",
-      "content": "You control a 6-DoF SO-ARM101 robot arm holding a marker over a horizontal tabletop whiteboard.\nYour task is to physically draw a recognizable **pelican riding a bicycle** on the whiteboard.\n\n### Coordinate Frame & Physical Constraints\n1. All coordinates `[X, Y, Z]` are in **meters** relative to the SO-ARM101 base `[0.0, 0.0, 0.0]`.\n2. On the 2D whiteboard view:\n   - `+X` points **UP** (top of the canvas, away from the robot base). Reachable range: `X in [0.160, 0.300]` meters (center `0.230`).\n   - `-X` points **DOWN** (bottom of the canvas, closer to the robot base).\n   - `+Y` points **LEFT** and `-Y` points **RIGHT**. Reachable range: `Y in [-0.140, +0.140]` meters (center `0.000`).\n3. Vertical heights (`Z` in meters):\n   - `z_draw = 0.005`: Whiteboard surface contact height (draws ink when `0.002 <= Z <= 0.008`).\n   - `z_up = 0.030`: Safe pen travel height above the board (no ink drawn).\n   - `Z < 0.000`: Collides with the desk and counts as a spatial hallucination.\n4. **Permanent Additive Ink**: Once the marker touches the whiteboard, ink cannot be erased. Always lift to `z_up` when moving between disconnected shapes (or use `draw_primitives`, which handles `z_up` and `z_draw` transitions automatically).\n\n### Available Tools\n- `get_workspace_spec()`: Call this first to inspect the exact metric bounds and current marker tip pose.\n- `draw_primitives(strokes)`: Execute a list of 2D primitives (`line`, `polyline`, `circle`, `arc`, `ellipse`, `bezier`) in meters. Automatically lifts to `z_up` before and after each primitive.\n- `draw_waypoints(waypoints_xyz)`: Execute an explicit list of 3D `[X, Y, Z]` waypoints in meters.\n- `run_python(code)`: Execute custom Python math using `np` (`numpy`), `math`, `WORKSPACE_SPEC`, `draw_primitives(strokes)`, and `draw_waypoints(waypoints_xyz)`.\n- `inspect_canvas()`: Render and view the current 2D whiteboard image (with metric coordinate rulers) and the 3D overhead camera image so you can verify your drawing and add any missing details.\n- `finish_drawing(summary)`: Call this when your pelican riding a bicycle is complete.\n"
+      "content": "You control a 6-DoF SO-ARM101 robot arm over a horizontal tabletop whiteboard with a 3-slot marker stand (`black`, `blue`, `red`).\nYour task is to physically draw the best, most detailed **pelican riding a bicycle** you are capable of creating on the whiteboard.\n\n### Coordinate Frame & Physical Constraints\n1. All coordinates `[X, Y, Z]` are in **meters** relative to the SO-ARM101 base `[0.0, 0.0, 0.0]`.\n2. In the overhead camera view:\n   - `+X` points **UP** (top of the whiteboard, away from the robot base) and `-X` points **DOWN** (bottom of the whiteboard, closer to the robot base).\n   - `+Y` points **LEFT** and `-Y` points **RIGHT**.\n   - `+Z` points vertically **UP** from the desk surface.\n3. **3-Slot Marker Stand (`black`, `blue`, `red`)**:\n   - The robot starts holding the `black` marker.\n   - A 3-slot marker stand sits on the right side of the whiteboard.\n   - You have full creative freedom over how to combine the `black`, `blue`, and `red` markers (via `select_marker(color)` or `'color': 'black' | 'blue' | 'red'` in `draw_primitives`).\n   - Whenever you switch colors, the robot arm physically moves to the 3-slot stand, opens its gripper to return the current marker, and grasps the new marker. Group strokes of the same color together to avoid unnecessary trips to the dock.\n4. **Permanent Additive Ink**: Once a marker touches the whiteboard, ink cannot be erased. Always lift to `z_up` when moving between disconnected shapes (or use `draw_primitives`, which lifts and lowers the marker automatically).\n\n### Available Tools\n- `get_workspace_detail()`: Retract the robot arm out of the camera view and return live RGB camera images (`overhead_cam` and `third_person_cam`) along with the calibrated whiteboard corner coordinates, `z_draw` / `z_up` heights, and current `pen_tip` `[X, Y, Z]` from the joint encoders. Call this at the start to see the workspace and after drawing to visually inspect your work.\n- `select_marker(color)`: Physically swap the held marker at the 3-slot stand (`'black'`, `'blue'`, or `'red'`).\n- `draw_primitives(strokes, color=...)`: Execute a list of 2D primitives (`line`, `polyline`, `circle`, `arc`, `ellipse`, `bezier`) in meters. Each stroke dict can also specify `'color': 'black' | 'blue' | 'red'`.\n- `draw_waypoints(waypoints_xyz, color=...)`: Execute an explicit list of 3D `[X, Y, Z]` waypoints in meters.\n- `run_python(code)`: Execute custom Python math using `np` (`numpy`), `math`, `WORKSPACE_SPEC`, `select_marker(color)`, `draw_primitives(strokes, color=...)`, and `draw_waypoints(waypoints_xyz, color=...)`.\n- `finish_drawing(summary)`: Call this when your drawing is complete.\n\n### Quality Expectations\nThis is a benchmark of your spatial reasoning, geometric precision, and visual artistry. Do not settle for a minimal stick figure. Use all of your capabilities (parametric curves, cubic Beziers, arcs, circles, Python math in `run_python`, all three marker colors, and live camera inspection via `get_workspace_detail()`) to produce a rich, well-proportioned, unmistakable illustration of a pelican riding a bicycle.\n"
     },
     {
       "role": "user",
-      "content": "Draw a complete, well-proportioned **pelican riding a bicycle** on the SO-ARM101 whiteboard.\n\nMake sure your drawing clearly includes all 5 anatomical and structural elements inside the metric bounds (`X in [0.160, 0.300]`, `Y in [-0.140, 0.140]`):\n1. Two distinct circular bicycle wheels aligned horizontally near the bottom (`X ~ 0.185 to 0.200`), with hubs/spokes.\n2. A connected bicycle diamond frame, seat post + saddle, fork, handlebars, and pedal crank.\n3. The pelican's body and tail perched on top of the saddle (`X ~ 0.235 to 0.255`), with a wing or arm reaching toward the handlebars.\n4. The pelican's curved neck, head, eye, and its signature long bill with a large curved throat pouch (`X ~ 0.265 to 0.288`).\n5. The pelican's two legs extending down from its body to the bicycle pedals/crank.\n\nStart by calling `get_workspace_spec()`, draw the bicycle and pelican using `draw_primitives` or `run_python`, optionally call `inspect_canvas()` to visually verify your work, and finish by calling `finish_drawing(summary)`."
+      "content": "Draw a **pelican riding a bicycle** on the whiteboard using the `black`, `blue`, and `red` markers.\n\nUse your full reasoning, mathematical, and visual capabilities to make this the best drawing you can produce:\n1. Call `get_workspace_detail()` first to inspect the live workspace cameras and read the calibrated whiteboard coordinates.\n2. Plan and draw a detailed, well-proportioned pelican riding a bicycle using your choice of `draw_primitives`, `run_python`, and the `black`, `blue`, and `red` markers.\n3. Call `get_workspace_detail()` to visually inspect your drawing on the live cameras and add any missing details or refinements before calling `finish_drawing(summary)`."
     },
     {
       "role": "assistant",
       "tool_call": {
         "id": "ref_0",
-        "name": "get_workspace_spec",
+        "name": "get_workspace_detail",
         "arguments": {}
       }
     },
     {
       "role": "tool",
-      "name": "get_workspace_spec",
+      "name": "get_workspace_detail",
       "content": {
-        "robot": "6-DoF SO-ARM101 (5 arm joints + marker held in gripper)",
+        "robot": "6-DoF SO-ARM101 (5 arm joints + gripper with 3-color marker dock)",
         "coordinate_frame": "Right-handed 3D metric coordinates [X, Y, Z] in meters relative to robot base [0, 0, 0]. On the 2D canvas view: +X points UP (top of drawing, away from robot base), -X points DOWN (bottom of drawing, closer to robot base), +Y points LEFT, and -Y points RIGHT.",
         "x_bounds_m": [
           0.16,
@@ -44,17 +44,45 @@
         "z_contact_threshold_m": 0.008,
         "z_up_m": 0.03,
         "z_collision_floor_m": 0.0,
+        "available_markers": [
+          "black",
+          "blue",
+          "red"
+        ],
+        "default_marker_color": "black",
+        "marker_dock_slots_xyz_m": {
+          "black": [
+            0.17,
+            -0.175,
+            0.015
+          ],
+          "blue": [
+            0.21,
+            -0.175,
+            0.015
+          ],
+          "red": [
+            0.25,
+            -0.175,
+            0.015
+          ]
+        },
         "canvas_resolution_px": {
           "width": 1000,
           "height": 500
         },
         "ink_policy": "Additive and permanent. Once ink is drawn on the board, it cannot be erased.",
+        "status": "ok",
         "current_pen_tip_xyz_m": [
-          0.0854,
-          0.2066,
-          0.0974
+          0.0853,
+          0.2063,
+          0.0959
         ],
-        "total_ink_pixels_drawn": 0
+        "active_marker_color": "black",
+        "colors_used": [],
+        "marker_swaps": 0,
+        "total_ink_pixels_drawn": 0,
+        "message": "Attached 2 live camera images: (1) overhead_cam (top-down RGB view of the robot, 3-slot marker stand, and whiteboard), and (2) third_person_cam (angled 3D RGB view)."
       }
     },
     {
@@ -71,6 +99,7 @@
                 0.055
               ],
               "radius": 0.024,
+              "color": "black",
               "label": "rear_wheel"
             },
             {
@@ -80,6 +109,7 @@
                 0.055
               ],
               "radius": 0.004,
+              "color": "black",
               "label": "rear_hub"
             },
             {
@@ -89,6 +119,7 @@
                 -0.055
               ],
               "radius": 0.024,
+              "color": "black",
               "label": "front_wheel"
             },
             {
@@ -98,7 +129,28 @@
                 -0.055
               ],
               "radius": 0.004,
+              "color": "black",
               "label": "front_hub"
+            },
+            {
+              "type": "circle",
+              "center_xy": [
+                0.194,
+                0.008
+              ],
+              "radius": 0.007,
+              "color": "black",
+              "label": "chainring"
+            },
+            {
+              "type": "circle",
+              "center_xy": [
+                0.282,
+                -0.018
+              ],
+              "radius": 0.0018,
+              "color": "black",
+              "label": "pelican_eye"
             },
             {
               "type": "polyline",
@@ -125,6 +177,7 @@
                 ]
               ],
               "closed": false,
+              "color": "red",
               "label": "bike_frame"
             },
             {
@@ -137,6 +190,7 @@
                 0.224,
                 0.032
               ],
+              "color": "red",
               "label": "seat_tube"
             },
             {
@@ -149,6 +203,7 @@
                 0.224,
                 0.022
               ],
+              "color": "red",
               "label": "saddle"
             },
             {
@@ -172,176 +227,8 @@
                 ]
               ],
               "closed": false,
+              "color": "red",
               "label": "fork_and_handlebars"
-            },
-            {
-              "type": "circle",
-              "center_xy": [
-                0.194,
-                0.008
-              ],
-              "radius": 0.007,
-              "label": "chainring"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "role": "tool",
-      "name": "draw_primitives",
-      "content": {
-        "status": "ok",
-        "waypoints_commanded": 676,
-        "interpolated_steps": 771,
-        "ink_pixels_added": 8614,
-        "total_ink_pixels": 8614,
-        "max_ik_error_mm": 0.101,
-        "final_pen_tip_xyz": [
-          0.2,
-          0.0079,
-          0.0286
-        ],
-        "spatial_hallucinations": 0,
-        "warnings": [],
-        "strokes_executed": 9
-      }
-    },
-    {
-      "role": "assistant",
-      "tool_call": {
-        "id": "ref_2",
-        "name": "inspect_canvas",
-        "arguments": {}
-      }
-    },
-    {
-      "role": "tool",
-      "name": "inspect_canvas",
-      "content": {
-        "status": "ok",
-        "total_ink_pixels": 8614,
-        "message": "Attached 2 images: (1) Annotated 2D Whiteboard Canvas with metric X/Y rulers, and (2) 3D Overhead Camera view."
-      }
-    },
-    {
-      "role": "assistant",
-      "tool_call": {
-        "id": "ref_3",
-        "name": "draw_primitives",
-        "arguments": {
-          "strokes": [
-            {
-              "type": "ellipse",
-              "center_xy": [
-                0.244,
-                0.022
-              ],
-              "rx": 0.015,
-              "ry": 0.026,
-              "rotation": -0.22,
-              "label": "pelican_body"
-            },
-            {
-              "type": "polyline",
-              "points_xy": [
-                [
-                  0.242,
-                  0.047
-                ],
-                [
-                  0.248,
-                  0.062
-                ],
-                [
-                  0.236,
-                  0.058
-                ],
-                [
-                  0.238,
-                  0.046
-                ]
-              ],
-              "closed": false,
-              "label": "tail_feathers"
-            },
-            {
-              "type": "bezier",
-              "p0": [
-                0.248,
-                0.028
-              ],
-              "p1": [
-                0.256,
-                0.01
-              ],
-              "p2": [
-                0.246,
-                -0.01
-              ],
-              "p3": [
-                0.236,
-                -0.028
-              ],
-              "label": "pelican_wing_to_bars"
-            },
-            {
-              "type": "bezier",
-              "p0": [
-                0.254,
-                0.002
-              ],
-              "p1": [
-                0.265,
-                0.008
-              ],
-              "p2": [
-                0.272,
-                -0.002
-              ],
-              "p3": [
-                0.278,
-                -0.012
-              ],
-              "label": "neck_back"
-            },
-            {
-              "type": "bezier",
-              "p0": [
-                0.246,
-                -0.002
-              ],
-              "p1": [
-                0.258,
-                0.0
-              ],
-              "p2": [
-                0.266,
-                -0.01
-              ],
-              "p3": [
-                0.272,
-                -0.018
-              ],
-              "label": "neck_front"
-            },
-            {
-              "type": "circle",
-              "center_xy": [
-                0.28,
-                -0.016
-              ],
-              "radius": 0.008,
-              "label": "pelican_head"
-            },
-            {
-              "type": "circle",
-              "center_xy": [
-                0.282,
-                -0.018
-              ],
-              "radius": 0.0018,
-              "label": "pelican_eye"
             },
             {
               "type": "polyline",
@@ -364,6 +251,7 @@
                 ]
               ],
               "closed": false,
+              "color": "red",
               "label": "upper_beak"
             },
             {
@@ -384,6 +272,7 @@
                 0.279,
                 -0.068
               ],
+              "color": "red",
               "label": "beak_throat_pouch"
             },
             {
@@ -407,6 +296,7 @@
                 ]
               ],
               "closed": false,
+              "color": "red",
               "label": "front_leg_pedal"
             },
             {
@@ -430,6 +320,7 @@
                 ]
               ],
               "closed": false,
+              "color": "red",
               "label": "rear_leg_pedal"
             }
           ]
@@ -441,19 +332,246 @@
       "name": "draw_primitives",
       "content": {
         "status": "ok",
-        "waypoints_commanded": 627,
-        "interpolated_steps": 726,
-        "ink_pixels_added": 8313,
-        "total_ink_pixels": 16927,
-        "max_ik_error_mm": 0.08,
+        "strokes_executed": 14,
+        "waypoints_commanded": 975,
+        "interpolated_steps": 1115,
+        "ink_pixels_added": 12253,
+        "total_ink_pixels": 12253,
+        "active_marker_color": "red",
+        "colors_used": [
+          "black",
+          "red"
+        ],
+        "marker_swaps": 1,
+        "max_ik_error_mm": 0.097,
         "final_pen_tip_xyz": [
           0.1871,
           0.005,
           0.0286
         ],
         "spatial_hallucinations": 0,
-        "warnings": [],
-        "strokes_executed": 11
+        "warnings": []
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_call": {
+        "id": "ref_2",
+        "name": "get_workspace_detail",
+        "arguments": {}
+      }
+    },
+    {
+      "role": "tool",
+      "name": "get_workspace_detail",
+      "content": {
+        "robot": "6-DoF SO-ARM101 (5 arm joints + gripper with 3-color marker dock)",
+        "coordinate_frame": "Right-handed 3D metric coordinates [X, Y, Z] in meters relative to robot base [0, 0, 0]. On the 2D canvas view: +X points UP (top of drawing, away from robot base), -X points DOWN (bottom of drawing, closer to robot base), +Y points LEFT, and -Y points RIGHT.",
+        "x_bounds_m": [
+          0.16,
+          0.3
+        ],
+        "y_bounds_m": [
+          -0.14,
+          0.14
+        ],
+        "center_xy_m": [
+          0.23,
+          0.0
+        ],
+        "z_draw_m": 0.005,
+        "z_contact_threshold_m": 0.008,
+        "z_up_m": 0.03,
+        "z_collision_floor_m": 0.0,
+        "available_markers": [
+          "black",
+          "blue",
+          "red"
+        ],
+        "default_marker_color": "black",
+        "marker_dock_slots_xyz_m": {
+          "black": [
+            0.17,
+            -0.175,
+            0.015
+          ],
+          "blue": [
+            0.21,
+            -0.175,
+            0.015
+          ],
+          "red": [
+            0.25,
+            -0.175,
+            0.015
+          ]
+        },
+        "canvas_resolution_px": {
+          "width": 1000,
+          "height": 500
+        },
+        "ink_policy": "Additive and permanent. Once ink is drawn on the board, it cannot be erased.",
+        "status": "ok",
+        "current_pen_tip_xyz_m": [
+          0.096,
+          0.2024,
+          0.0927
+        ],
+        "active_marker_color": "red",
+        "colors_used": [
+          "black",
+          "red"
+        ],
+        "marker_swaps": 1,
+        "total_ink_pixels_drawn": 12253,
+        "message": "Attached 2 live camera images: (1) overhead_cam (top-down RGB view of the robot, 3-slot marker stand, and whiteboard), and (2) third_person_cam (angled 3D RGB view)."
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_call": {
+        "id": "ref_3",
+        "name": "draw_primitives",
+        "arguments": {
+          "strokes": [
+            {
+              "type": "ellipse",
+              "center_xy": [
+                0.244,
+                0.022
+              ],
+              "rx": 0.015,
+              "ry": 0.026,
+              "rotation": -0.22,
+              "color": "blue",
+              "label": "pelican_body"
+            },
+            {
+              "type": "polyline",
+              "points_xy": [
+                [
+                  0.242,
+                  0.047
+                ],
+                [
+                  0.248,
+                  0.062
+                ],
+                [
+                  0.236,
+                  0.058
+                ],
+                [
+                  0.238,
+                  0.046
+                ]
+              ],
+              "closed": false,
+              "color": "blue",
+              "label": "tail_feathers"
+            },
+            {
+              "type": "bezier",
+              "p0": [
+                0.248,
+                0.028
+              ],
+              "p1": [
+                0.256,
+                0.01
+              ],
+              "p2": [
+                0.246,
+                -0.01
+              ],
+              "p3": [
+                0.236,
+                -0.028
+              ],
+              "color": "blue",
+              "label": "pelican_wing_to_bars"
+            },
+            {
+              "type": "bezier",
+              "p0": [
+                0.254,
+                0.002
+              ],
+              "p1": [
+                0.265,
+                0.008
+              ],
+              "p2": [
+                0.272,
+                -0.002
+              ],
+              "p3": [
+                0.278,
+                -0.012
+              ],
+              "color": "blue",
+              "label": "neck_back"
+            },
+            {
+              "type": "bezier",
+              "p0": [
+                0.246,
+                -0.002
+              ],
+              "p1": [
+                0.258,
+                0.0
+              ],
+              "p2": [
+                0.266,
+                -0.01
+              ],
+              "p3": [
+                0.272,
+                -0.018
+              ],
+              "color": "blue",
+              "label": "neck_front"
+            },
+            {
+              "type": "circle",
+              "center_xy": [
+                0.28,
+                -0.016
+              ],
+              "radius": 0.008,
+              "color": "blue",
+              "label": "pelican_head"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "role": "tool",
+      "name": "draw_primitives",
+      "content": {
+        "status": "ok",
+        "strokes_executed": 6,
+        "waypoints_commanded": 340,
+        "interpolated_steps": 394,
+        "ink_pixels_added": 4674,
+        "total_ink_pixels": 16927,
+        "active_marker_color": "blue",
+        "colors_used": [
+          "black",
+          "blue",
+          "red"
+        ],
+        "marker_swaps": 2,
+        "max_ik_error_mm": 0.074,
+        "final_pen_tip_xyz": [
+          0.2867,
+          -0.0159,
+          0.0277
+        ],
+        "spatial_hallucinations": 0,
+        "warnings": []
       }
     },
     {
@@ -462,7 +580,7 @@
         "id": "ref_4",
         "name": "finish_drawing",
         "arguments": {
-          "summary": "Completed reference pelican riding a bicycle across 20 strokes."
+          "summary": "Completed 3-color reference pelican riding a bicycle across 20 strokes."
         }
       }
     },
@@ -471,8 +589,14 @@
       "name": "finish_drawing",
       "content": {
         "status": "finished",
-        "summary": "Completed reference pelican riding a bicycle across 20 strokes.",
-        "total_ink_pixels": 16927
+        "summary": "Completed 3-color reference pelican riding a bicycle across 20 strokes.",
+        "total_ink_pixels": 16927,
+        "colors_used": [
+          "black",
+          "blue",
+          "red"
+        ],
+        "marker_swaps": 2
       }
     }
   ]

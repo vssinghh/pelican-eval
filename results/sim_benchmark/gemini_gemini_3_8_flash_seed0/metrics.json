@@ -39,5 +39,6 @@
   "marker_swaps": 2,
   "finished_cleanly": true,
   "canvas_path": "gemini_gemini_3_8_flash_seed0/overhead_final.png",
-  "timelapse_path": "gemini_gemini_3_8_flash_seed0/timelapse.gif"
+  "timelapse_path": "gemini_gemini_3_8_flash_seed0/timelapse.gif",
+  "total_tokens": 154022
 }

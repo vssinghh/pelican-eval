@@ -11,7 +11,7 @@ from harness.agent_loop import AgentRunResult
 
 @dataclass
 class EpisodeMetrics:
-    """Consolidated 5-metric scorecard for a single PelicanBench evaluation episode."""
+    """Consolidated 6-metric scorecard for a single PelicanBench evaluation episode."""
 
     model: str
     provider: str
@@ -34,6 +34,11 @@ class EpisodeMetrics:
     finished_cleanly: bool
     canvas_path: str
     timelapse_path: str
+    total_tokens: int = 0
+
+    def __post_init__(self) -> None:
+        if self.total_tokens == 0:
+            self.total_tokens = int(self.prompt_tokens) + int(self.completion_tokens)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert metrics dataclass to JSON-serializable dictionary."""
@@ -82,6 +87,7 @@ def build_episode_metrics(
         visual_breakdown=visual_res.to_dict(),
         prompt_tokens=run_res.prompt_tokens,
         completion_tokens=run_res.completion_tokens,
+        total_tokens=run_res.prompt_tokens + run_res.completion_tokens,
         ink_pixels_drawn=int(ink_pixels_drawn),
         colors_used=list(run_res.colors_used),
         marker_swaps=int(run_res.marker_swaps),
@@ -94,12 +100,13 @@ def build_episode_metrics(
 def format_leaderboard_row(m: EpisodeMetrics) -> str:
     """Format a single Markdown table row matching LEADERBOARD.md."""
     hall_str = f"`{m.total_hallucinations} ({m.spatial_hallucinations} / {m.code_hallucinations})`"
+    tok_str = f"`{m.total_tokens:,} ({m.prompt_tokens:,} / {m.completion_tokens:,})`"
     cost_str = f"`\\${m.cost_usd:.4f}`"
     vis_str = f"**`{m.visual_score:.1f} / 10`**"
     links = f"[Overhead]({m.canvas_path}) / [GIF]({m.timelapse_path})"
     return (
         f"| `{m.model}` | {m.provider} | {hall_str} | `{m.total_tool_calls}` | "
-        f"`{m.e2e_time_s:.2f}s` | {cost_str} | {vis_str} | {links} |"
+        f"{tok_str} | `{m.e2e_time_s:.2f}s` | {cost_str} | {vis_str} | {links} |"
     )
 
 
@@ -107,8 +114,8 @@ def format_markdown_summary_table(metrics_list: list[EpisodeMetrics]) -> str:
     """Format a full Markdown table for a list of evaluated models."""
     header = (
         "| Model | Provider | Hallucinations (`Spatial / Code`) | Tool Calls | "
-        "End-to-End Time (`s`) | Cost (`USD`) | Visual Score (`0..10`) | Visual Output |\n"
-        "| :- | :- | :-: | :-: | :-: | :-: | :-: | :- |"
+        "Tokens (`Total (In / Out)`) | End-to-End Time (`s`) | Cost (`USD`) | Visual Score (`0..10`) | Visual Output |\n"
+        "| :- | :- | :-: | :-: | :-: | :-: | :-: | :-: | :- |"
     )
     rows = [format_leaderboard_row(m) for m in metrics_list]
     return "\n".join([header, *rows])

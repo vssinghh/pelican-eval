@@ -17,15 +17,16 @@ Every model gets the exact same prompt and the same 6 tools across two levels:
 
 ***
 
-## 2. The 5 Metrics We Measure
+## 2. The 6 Metrics We Measure
 
 | Metric | Unit | What It Measures |
 | :- | :- | :- |
 | **1. Hallucinations** | `Count (Spatial / Code)` | Points outside the whiteboard, table crashes (`Z < 0`), unreachable arm poses, drawing in mid-air (`0` ink), or broken Python/tool calls |
 | **2. Tool Calls** | `Count` | How many tool calls the model used to finish the drawing |
-| **3. End-to-End Time** | `Seconds (s)` | Total time from sending the prompt to finishing the drawing |
-| **4. Cost** | `USD (\$)` | Total API token cost (text + camera images) tracked by `LiteLLM` |
-| **5. Visual Output** | `0 to 10` + `PNG/GIF` | Score out of `10` (`2` points each for wheels, bike frame, pelican head/beak, body/limbs, and riding pose) plus the final image and GIF |
+| **3. Tokens Used** | `Total (Input / Output)` | Total input (text + camera images) and output/thinking tokens used across the episode |
+| **4. End-to-End Time** | `Seconds (s)` | Total time from sending the prompt to finishing the drawing |
+| **5. Cost** | `USD (\$)` | Total API token cost (text + camera images) tracked by `LiteLLM` |
+| **6. Visual Output** | `0 to 10` + `Overhead/GIF` | Score out of `10` (`2` points each for wheels, bike frame, pelican head/beak, body/limbs, and riding pose) plus the final overhead camera image and GIF |
 
 ***
 

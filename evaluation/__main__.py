@@ -131,6 +131,8 @@ def main() -> None:
             print(f"  Hallucinations: {ep_metrics.total_hallucinations} "
                   f"(Spatial: {ep_metrics.spatial_hallucinations}, Code: {ep_metrics.code_hallucinations})")
             print(f"  Tool Calls:     {ep_metrics.total_tool_calls} {ep_metrics.tool_call_counts}")
+            print(f"  Tokens Used:    {ep_metrics.total_tokens:,} "
+                  f"(Input: {ep_metrics.prompt_tokens:,}, Output: {ep_metrics.completion_tokens:,})")
             print(f"  End-to-End:     {ep_metrics.e2e_time_s:.2f}s")
             print(f"  Cost (USD):     ${ep_metrics.cost_usd:.5f}")
             print(f"  Visual Score:   {ep_metrics.visual_score:.2f} / 10.0 ({visual_res.rationale})")

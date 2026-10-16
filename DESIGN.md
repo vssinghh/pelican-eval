@@ -191,14 +191,15 @@ Every model can call these 6 tools in any order (up to `max_turns = 10` turns):
 
 ## 6. Scoring & Saved Files (`evaluation/`)
 
-### 6.1 The 5 Benchmark Metrics (`evaluation/metrics.py`)
+### 6.1 The 6 Benchmark Metrics (`evaluation/metrics.py`)
 1. **Hallucinations (`total = spatial + code`)**:
    - `spatial_hallucinations`: Out-of-bounds `(X, Y)` coordinates, table crashes (`Z < 0.0 m`), unreachable IK points, or air-drawing calls (`0` ink pixels).
    - `code_hallucinations`: Invalid tool names, bad JSON arguments, or Python exceptions inside `run_python`.
 2. **Tool Calls**: Total number of tool calls made during the episode.
-3. **End-to-End Time (`s`)**: Total wall-clock seconds from sending the prompt to `finish_drawing()`.
-4. **Cost (`USD`)**: Total API token cost computed by `LiteLLM`.
-5. **Visual Score (`0 to 10`)**: Graded across 5 parts (`0` to `2` points each):
+3. **Tokens (`total = prompt_tokens + completion_tokens`)**: Total input tokens (text + camera images) and output/thinking tokens consumed across all turns.
+4. **End-to-End Time (`s`)**: Total wall-clock seconds from sending the prompt to `finish_drawing()`.
+5. **Cost (`USD`)**: Total API token cost computed by `LiteLLM`.
+6. **Visual Score (`0 to 10`)**: Graded across 5 parts (`0` to `2` points each):
    - **Wheels (`0..2`)**: Two separate circular wheels near the bottom of the board.
    - **Bicycle Frame (`0..2`)**: Frame connecting the wheels, seat, pedals, and handlebars.
    - **Pelican Head & Beak (`0..2`)**: Head and long pouched beak near the top.
@@ -208,7 +209,7 @@ Every model can call these 6 tools in any order (up to `max_turns = 10` turns):
 ### 6.2 Files Saved for Each Run (`results/<domain>/<model>_seed<N>/`)
 ```text
 results/sim_benchmark/gemini_gemini_3_8_flash_seed0/
-├── metrics.json                  # The 5 metrics + token and tool call breakdown
+├── metrics.json                  # The 6 metrics + token and tool call breakdown
 ├── transcript.json               # Full prompt, model replies, tool calls, and errors
 ├── overhead_final.png            # Final 3D overhead camera view of whiteboard and marker stand
 ├── timelapse.gif                 # Side-by-side animated GIF of the robot drawing
