@@ -11,10 +11,10 @@ Instead of outputting a 2D SVG text file, the model must move a 3D robot arm in 
 ### Goal 1: Fair Comparison in MuJoCo Simulation (`Level 1: -d sim`)
 Give every model (`Claude`, `Gemini`, `GPT`, `DeepSeek`, `Qwen`) the exact same system prompt and the same 6 tools via `LiteLLM`.
 In a single run, the model must:
-1. Check the whiteboard bounds (`[X, Y, Z]` in meters relative to the robot base).
+1. Call `get_workspace_detail()` to inspect the live camera images (`overhead_cam` and `third_person_cam`) and read the calibrated whiteboard `[X, Y, Z]` bounds in meters.
 2. Lower the marker to `z_draw = 0.005 m` to draw and lift to `z_up = 0.030 m` when moving between parts.
 3. Work with **permanent ink**: once a line is drawn on the board, it cannot be erased.
-4. Optionally call `inspect_canvas()` to view the camera image of what it has drawn so far and add missing parts before calling `finish_drawing()`.
+4. Optionally call `get_workspace_detail()` again to check the live camera view of what it has drawn so far and add missing parts before calling `finish_drawing()`.
 
 ### Goal 2: Run on the Physical SO-ARM101 Robot (`Level 2: -d real`)
 Use the same 6-DoF **SO-ARM101** robot geometry and metric coordinates in both simulation and the real world. After touching the marker tip to the 4 corners of a physical whiteboard to measure desk tilt, the exact same harness runs on the real `so_101_follower` arm over USB.
@@ -31,11 +31,11 @@ flowchart TD
     end
 
     subgraph Tools ["2. The 6 Robot Tools"]
-        T1["get_workspace_spec()<br/>Returns Whiteboard Bounds [X, Y, Z]"]
-        T2["draw_primitives(strokes)<br/>Lines, Circles, Arcs, Beziers"]
-        T3["draw_waypoints(waypoints_xyz)<br/>List of 3D [X, Y, Z] Points"]
+        T1["get_workspace_detail()<br/>Returns 2 Live Camera Images + Calibrated [X, Y, Z] Bounds"]
+        T2["select_marker(color)<br/>Swaps Marker at 3-Slot Stand (black, blue, red)"]
+        T3["draw_primitives(strokes) / draw_waypoints(waypoints_xyz)<br/>Lines, Circles, Arcs, Beziers, 3D Points"]
         T4["run_python(code)<br/>NumPy & Math Sandbox"]
-        T5["inspect_canvas() / finish_drawing()<br/>Returns Whiteboard & Camera Images"]
+        T5["finish_drawing(summary)<br/>Parks Arm & Ends Episode"]
     end
 
     subgraph Motion ["3. Robot Motion Planner"]
@@ -174,18 +174,17 @@ Both `SimWhiteboardEnv` and `RealWhiteboardEnv` use the same 3D coordinate syste
 
 ***
 
-## 5. The 7 Robot Tools (`harness/tools.py`)
+## 5. The 6 Robot Tools (`harness/tools.py`)
 
-Every model can call these 7 tools in any order (up to `max_turns = 10` turns):
+Every model can call these 6 tools in any order (up to `max_turns = 10` turns):
 
 | Tool | Input | What It Does & What Counts as a Hallucination |
 | :- | :- | :- |
-| **`get_workspace_spec`** | `{}` | Returns the whiteboard `[X, Y, Z]` bounds in meters, available marker colors (`black`, `blue`, `red`), 3-slot dock coordinates, and current marker position. |
+| **`get_workspace_detail`** | `{}` | Moves the arm to home so it does not block the cameras, then returns 2 live RGB camera images (`overhead_cam` and `third_person_cam`) along with the calibrated whiteboard `[X, Y, Z]` bounds in meters, available marker colors (`black`, `blue`, `red`), 3-slot dock coordinates, and current marker position. |
 | **`select_marker`** | `color: 'black' \| 'blue' \| 'red'` | Moves the robot arm to the 3-slot stand, opens the gripper to return the current marker to its slot, and picks up the requested color. Logs a **Code Hallucination** if an invalid color name is given. |
 | **`draw_primitives`** | `strokes: list[dict], color?: str` | Draws 2D shapes in meters (`line`, `polyline`, `circle`, `arc`, `ellipse`, `bezier`). Each stroke can also specify `'color': 'black' \| 'blue' \| 'red'` to trigger a marker swap at the dock. Logs a **Spatial Hallucination** if any point falls outside the board. |
 | **`draw_waypoints`** | `waypoints_xyz: list[[x, y, z]], color?: str` | Moves the marker through an explicit list of 3D `[X, Y, Z]` coordinates. Logs a **Spatial Hallucination** if a point is out of bounds, hits the table (`Z < 0`), or stays in the air the whole time (`0` ink drawn). |
-| **`run_python`** | `code: str` | Runs custom Python math using `np` (`numpy`), `math`, `WORKSPACE_SPEC`, `select_marker`, `draw_primitives`, and `draw_waypoints`. Logs a **Code Hallucination** if the code has a syntax/runtime error or tries to import blocked modules (`os`, `sys`, `subprocess`, `open`). |
-| **`inspect_canvas`** | `{}` | Moves the arm out of the way and returns 2 PNG images to the model: (1) the 2D whiteboard with metric `X/Y` rulers along the edges, and (2) the 3D overhead camera view. |
+| **`run_python`** | `code: str` | Runs custom Python math using `np` (`numpy`), `math`, `WORKSPACE_SPEC`, `select_marker`, `draw_primitives`, and `draw_waypoints`. Functions and variables persist across calls within the same episode. Logs a **Code Hallucination** if the code has a syntax/runtime error or tries to import blocked modules (`os`, `sys`, `subprocess`, `open`). |
 | **`finish_drawing`** | `summary: str` | Parks the arm at home, stops the timer, and scores the final drawing. |
 
 ***
@@ -208,13 +207,10 @@ Every model can call these 7 tools in any order (up to `max_turns = 10` turns):
 
 ### 6.2 Files Saved for Each Run (`results/<domain>/<model>_seed<N>/`)
 ```text
-results/sim_benchmark/claude_sonnet_4_seed0/
+results/sim_benchmark/gemini_gemini_3_8_flash_seed0/
 ├── metrics.json                  # The 5 metrics + token and tool call breakdown
 ├── transcript.json               # Full prompt, model replies, tool calls, and errors
-├── canvas_final.png              # Clean 1000x500 whiteboard drawing
-├── canvas_grid.png               # Whiteboard drawing with metric X/Y rulers
-├── overhead_final.png            # 3D overhead camera view
-├── third_person_final.png        # 3D side camera view showing the SO-ARM101 arm
+├── overhead_final.png            # Final 3D overhead camera view of whiteboard and marker stand
 ├── timelapse.gif                 # Side-by-side animated GIF of the robot drawing
 └── trajectory_500hz.npz          # 500 Hz joint positions, velocities, pen tip XYZ, and ink contact
 ```

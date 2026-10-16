@@ -2,7 +2,7 @@
 
 **PelicanBench** tests how well AI models (`Claude`, `Gemini`, `GPT`, `DeepSeek`, `Qwen`) control a 6-DoF **SO-ARM101** robot arm (`5` arm joints + `1` gripper) to draw a **pelican riding a bicycle** on a whiteboard using a 3-slot marker stand (**`black`**, **`blue`**, and **`red`**).
 
-Every model gets the exact same prompt and the same 7 tools across two levels:
+Every model gets the exact same prompt and the same 6 tools across two levels:
 1. **Level 1 (`sim`)**: Draw on a virtual whiteboard in **MuJoCo** (`500 Hz` physics simulation) with a 3-slot marker stand beside the board.
 2. **Level 2 (`real`)**: Draw on a physical whiteboard using a real **SO-ARM101** robot arm and a 3-slot marker stand.
 

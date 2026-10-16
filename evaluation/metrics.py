@@ -96,7 +96,7 @@ def format_leaderboard_row(m: EpisodeMetrics) -> str:
     hall_str = f"`{m.total_hallucinations} ({m.spatial_hallucinations} / {m.code_hallucinations})`"
     cost_str = f"`\\${m.cost_usd:.4f}`"
     vis_str = f"**`{m.visual_score:.1f} / 10`**"
-    links = f"[Canvas]({m.canvas_path}) / [GIF]({m.timelapse_path})"
+    links = f"[Overhead]({m.canvas_path}) / [GIF]({m.timelapse_path})"
     return (
         f"| `{m.model}` | {m.provider} | {hall_str} | `{m.total_tool_calls}` | "
         f"`{m.e2e_time_s:.2f}s` | {cost_str} | {vis_str} | {links} |"
@@ -107,7 +107,7 @@ def format_markdown_summary_table(metrics_list: list[EpisodeMetrics]) -> str:
     """Format a full Markdown table for a list of evaluated models."""
     header = (
         "| Model | Provider | Hallucinations (`Spatial / Code`) | Tool Calls | "
-        "End-to-End Time (`s`) | Cost (`USD`) | Visual Score (`0..10`) | Canvas & Replay |\n"
+        "End-to-End Time (`s`) | Cost (`USD`) | Visual Score (`0..10`) | Visual Output |\n"
         "| :- | :- | :-: | :-: | :-: | :-: | :-: | :- |"
     )
     rows = [format_leaderboard_row(m) for m in metrics_list]

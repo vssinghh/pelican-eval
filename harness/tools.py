@@ -19,11 +19,11 @@ OPENAI_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "get_workspace_spec",
+            "name": "get_workspace_detail",
             "description": (
-                "Return the metric coordinate frame, reachable whiteboard bounds [X, Y, Z] in meters, "
-                "available marker colors ('black', 'blue', 'red'), 3-slot dock coordinates, "
-                "pen contact height z_draw, safe travel height z_up, and current marker tip position."
+                "Retract the robot arm out of the camera view and return live RGB camera images "
+                "(overhead_cam and third_person_cam) along with the calibrated whiteboard corner "
+                "coordinates, pen contact height z_draw, safe travel height z_up, and current pen_tip [X, Y, Z]."
             ),
             "parameters": {
                 "type": "object",
@@ -124,7 +124,7 @@ OPENAI_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "run_python",
             "description": (
                 "Execute custom Python 3 code in a math sandbox with pre-imported 'np' (numpy), 'math', "
-                "'WORKSPACE_SPEC', 'select_marker(color)', 'draw_primitives(strokes)', and 'draw_waypoints(waypoints_xyz, color=...)'."
+                "'WORKSPACE_SPEC', 'select_marker(color)', 'draw_primitives(strokes, color=...)', and 'draw_waypoints(waypoints_xyz, color=...)'."
             ),
             "parameters": {
                 "type": "object",
@@ -135,21 +135,6 @@ OPENAI_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     }
                 },
                 "required": ["code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "inspect_canvas",
-            "description": (
-                "Retract the robot arm out of the camera view and capture the current 2D whiteboard "
-                "image (with metric X/Y coordinate rulers) and 3D overhead camera view."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
             },
         },
     },
@@ -210,12 +195,11 @@ class WhiteboardToolBelt:
         self.code_hallucinations: int = 0
         self.total_tool_calls: int = 0
         self.tool_call_counts: dict[str, int] = {
-            "get_workspace_spec": 0,
+            "get_workspace_detail": 0,
             "select_marker": 0,
             "draw_primitives": 0,
             "draw_waypoints": 0,
             "run_python": 0,
-            "inspect_canvas": 0,
             "finish_drawing": 0,
         }
         self.hallucination_log: list[str] = []
@@ -322,17 +306,26 @@ class WhiteboardToolBelt:
                 response_json=json.dumps({"status": "error", "error": msg}),
             )
 
-        if tool_name == "get_workspace_spec":
+        if tool_name == "get_workspace_detail":
+            self.env.move_to_home()
             obs = self.env.get_obs()
+            b64_overhead = encode_rgb_to_base64_png(obs["rgb_overhead_cam"], max_width=640)
+            b64_third_person = encode_rgb_to_base64_png(obs["rgb_third_person_cam"], max_width=640)
             payload = dict(WORKSPACE_SPEC)
+            payload["status"] = "ok"
             payload["current_pen_tip_xyz_m"] = [round(float(v), 4) for v in obs["pen_tip_xyz"]]
             payload["active_marker_color"] = obs.get("active_marker_color", "black")
             payload["colors_used"] = obs.get("colors_used", [])
             payload["marker_swaps"] = int(obs.get("marker_swaps", 0))
             payload["total_ink_pixels_drawn"] = int(obs["ink_pixels_drawn"])
+            payload["message"] = (
+                "Attached 2 live camera images: (1) overhead_cam (top-down RGB view of the robot, "
+                "3-slot marker stand, and whiteboard), and (2) third_person_cam (angled 3D RGB view)."
+            )
             return ToolExecutionResult(
                 tool_name=tool_name,
                 response_json=json.dumps(payload),
+                images_base64_png=[b64_overhead, b64_third_person],
             )
 
         if tool_name == "select_marker":
@@ -449,28 +442,6 @@ class WhiteboardToolBelt:
                 ),
             )
 
-        if tool_name == "inspect_canvas":
-            self.env.move_to_home()
-            obs = self.env.get_obs()
-            b64_canvas = encode_rgb_to_base64_png(obs["canvas_annotated_rgb"], max_width=800)
-            b64_overhead = encode_rgb_to_base64_png(obs["rgb_overhead_cam"], max_width=640)
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                response_json=json.dumps(
-                    {
-                        "status": "ok",
-                        "total_ink_pixels": int(obs["ink_pixels_drawn"]),
-                        "active_marker_color": obs.get("active_marker_color", "black"),
-                        "colors_used": obs.get("colors_used", []),
-                        "marker_swaps": int(obs.get("marker_swaps", 0)),
-                        "message": (
-                            "Attached 2 images: (1) Annotated 2D Whiteboard Canvas with metric X/Y rulers, "
-                            "and (2) 3D Overhead Camera view."
-                        ),
-                    }
-                ),
-                images_base64_png=[b64_canvas, b64_overhead],
-            )
 
         if tool_name == "finish_drawing":
             self.env.move_to_home()
@@ -495,7 +466,7 @@ class WhiteboardToolBelt:
         self.code_hallucinations += 1
         msg = (
             f"Unknown tool '{tool_name}'. Available tools: "
-            "get_workspace_spec, select_marker, draw_primitives, draw_waypoints, run_python, inspect_canvas, finish_drawing."
+            "get_workspace_detail, select_marker, draw_primitives, draw_waypoints, run_python, finish_drawing."
         )
         self.hallucination_log.append(msg)
         return ToolExecutionResult(

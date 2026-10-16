@@ -38,7 +38,7 @@ def test_visual_judge_blank_vs_reference_pelican(tmp_path: Path) -> None:
         metrics, ep_dir = recorder.save_episode(env, run_res, score_done, seed=0)
         assert (ep_dir / "metrics.json").exists()
         assert (ep_dir / "transcript.json").exists()
-        assert (ep_dir / "canvas_final.png").exists()
+        assert (ep_dir / "overhead_final.png").exists()
         assert (ep_dir / "timelapse.gif").exists()
         assert (ep_dir / "trajectory_500hz.npz").exists()
         assert metrics.visual_score >= 9.0
@@ -52,7 +52,7 @@ def test_litellm_provider_agent_loop_on_real_env_mock(monkeypatch: Any) -> None:
         SimpleNamespace(
             id="call_1",
             function=SimpleNamespace(
-                name="get_workspace_spec",
+                name="get_workspace_detail",
                 arguments="{}",
             ),
         ),

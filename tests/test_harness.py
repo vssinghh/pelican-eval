@@ -14,10 +14,11 @@ def test_tool_belt_and_hallucination_tracking() -> None:
     try:
         belt = WhiteboardToolBelt(env)
 
-        # 1. get_workspace_spec
-        res_spec = belt.dispatch("get_workspace_spec", "{}")
+        # 1. get_workspace_detail returns calibrated bounds and 2 live camera images
+        res_spec = belt.dispatch("get_workspace_detail", "{}")
         spec_data = json.loads(res_spec.response_json)
         assert spec_data["x_bounds_m"] == [0.16, 0.3]
+        assert len(res_spec.images_base64_png) == 2
         assert belt.total_tool_calls == 1
 
         # 2. Valid run_python drawing a wheel circle
@@ -53,11 +54,7 @@ print("Drew pixels:", stats["ink_pixels_added"])
         belt.dispatch("erase_board", "{}")
         assert belt.code_hallucinations == 2
 
-        # 6. inspect_canvas returns 2 base64 PNG images
-        res_insp = belt.dispatch("inspect_canvas", "{}")
-        assert len(res_insp.images_base64_png) == 2
-
-        # 7. finish_drawing marks episode finished
+        # 6. finish_drawing marks episode finished
         res_fin = belt.dispatch("finish_drawing", {"summary": "Done testing."})
         assert res_fin.is_finish
         assert belt.finished
@@ -96,7 +93,15 @@ def test_three_color_marker_dock_swaps() -> None:
         assert set(draw_data["colors_used"]) == {"red", "blue"}
         assert env.marker_swaps == 2
 
-        # 3. Invalid marker color increments code_hallucinations
+        # 3. Persistent run_python state across calls + draw_primitives(strokes, color='red')
+        belt.dispatch("run_python", {"code": "def my_strokes():\n    return [{'type': 'line', 'from_xy': [0.22, -0.02], 'to_xy': [0.25, -0.02]}]"})
+        res_sb_color = belt.dispatch("run_python", {"code": "draw_primitives(my_strokes(), color='red')"})
+        sb_color_data = json.loads(res_sb_color.response_json)
+        assert sb_color_data["status"] == "ok"
+        assert sb_color_data["active_marker_color"] == "red"
+        assert belt.code_hallucinations == 0
+
+        # 4. Invalid marker color increments code_hallucinations
         res_bad = belt.dispatch("select_marker", {"color": "purple"})
         bad_data = json.loads(res_bad.response_json)
         assert bad_data["status"] == "error"

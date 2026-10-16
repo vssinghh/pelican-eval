@@ -104,8 +104,10 @@ class PelicanAgentRunner:
                 "tool_choice": "auto",
                 "timeout": self.timeout_s,
             }
-            # Reasoning models (o1/o3/o4-mini/gpt-5) sometimes disallow custom temperature
-            if not any(tag in self.model.lower() for tag in ("o1", "o3", "o4", "reasoner")):
+            # Reasoning models and Gemini 3+ models disallow or deprecate custom temperature
+            if not any(
+                tag in self.model.lower() for tag in ("o1", "o3", "o4", "reasoner", "gemini-3")
+            ):
                 completion_kwargs["temperature"] = self.temperature
 
             response = litellm.completion(**completion_kwargs)
@@ -174,9 +176,10 @@ class PelicanAgentRunner:
                         {
                             "type": "text",
                             "text": (
-                                "Here are the live images from inspect_canvas(): "
-                                "(1) 2D whiteboard with metric X/Y rulers, (2) 3D overhead camera view. "
-                                "Add any missing strokes or call finish_drawing(summary) if complete."
+                                "Here are the live camera images from get_workspace_detail(): "
+                                "(1) overhead_cam (top-down RGB view of the robot, 3-slot marker stand, and whiteboard), "
+                                "and (2) third_person_cam (angled 3D RGB view). "
+                                "Draw or refine strokes on the whiteboard, or call finish_drawing(summary) if complete."
                             ),
                         }
                     ]
@@ -191,7 +194,7 @@ class PelicanAgentRunner:
                     transcript.append(
                         {
                             "role": "user",
-                            "content": "[Attached 2 live canvas PNG images from inspect_canvas()]",
+                            "content": "[Attached 2 live camera PNG images from get_workspace_detail()]",
                         }
                     )
 
@@ -211,7 +214,7 @@ class PelicanAgentRunner:
                     {
                         "role": "user",
                         "content": (
-                            "You have not drawn on the whiteboard yet. Please call get_workspace_spec(), "
+                            "You have not drawn on the whiteboard yet. Please call get_workspace_detail(), "
                             "draw_primitives(), or run_python() to draw the pelican riding a bicycle, "
                             "then call finish_drawing()."
                         ),
@@ -254,9 +257,9 @@ class PelicanAgentRunner:
         """Execute a deterministic 5-call 3-color reference trajectory through the exact tool belt."""
         strokes = get_reference_pelican_strokes()
         calls = [
-            ("get_workspace_spec", {}),
+            ("get_workspace_detail", {}),
             ("draw_primitives", {"strokes": strokes[:14]}),
-            ("inspect_canvas", {}),
+            ("get_workspace_detail", {}),
             ("draw_primitives", {"strokes": strokes[14:]}),
             (
                 "finish_drawing",

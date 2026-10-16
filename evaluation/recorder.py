@@ -25,6 +25,29 @@ def slugify_model_name(model_id: str) -> str:
     return cleaned or "model"
 
 
+def save_optimized_gif(
+    frames: list[np.ndarray],
+    gif_path: Path,
+    duration_ms: int = 90,
+) -> None:
+    """Save RGB numpy frames as a compact, single-palette animated GIF without dither noise."""
+    pil_rgb = [Image.fromarray(f) for f in frames]
+    base_pal = pil_rgb[-1].quantize(
+        colors=256,
+        method=Image.Quantize.FASTOCTREE,
+        dither=Image.Dither.NONE,
+    )
+    pal_frames = [f.quantize(palette=base_pal, dither=Image.Dither.NONE) for f in pil_rgb]
+    pal_frames[0].save(
+        gif_path,
+        save_all=True,
+        append_images=pal_frames[1:],
+        duration=duration_ms,
+        loop=0,
+        optimize=True,
+    )
+
+
 class EpisodeRecorder:
     """Saves all episode artifacts, 500 Hz trajectories, and summary tables."""
 
@@ -39,34 +62,21 @@ class EpisodeRecorder:
         visual_res: VisualRubricBreakdown,
         seed: int = 0,
     ) -> tuple[EpisodeMetrics, Path]:
-        """Write metrics.json, transcript.json, PNGs, GIF, and trajectory_500hz.npz."""
+        """Write metrics.json, transcript.json, overhead_final.png, timelapse.gif, and trajectory_500hz.npz."""
         slug = slugify_model_name(run_res.model)
         ep_dir = self.output_root / f"{slug}_seed{seed}"
         ep_dir.mkdir(parents=True, exist_ok=True)
 
         obs = env.get_obs()
-        canvas_path = ep_dir / "canvas_final.png"
-        grid_path = ep_dir / "canvas_grid.png"
         overhead_path = ep_dir / "overhead_final.png"
-        third_person_path = ep_dir / "third_person_final.png"
         gif_path = ep_dir / "timelapse.gif"
         npz_path = ep_dir / "trajectory_500hz.npz"
 
-        Image.fromarray(obs["canvas_rgb"]).save(canvas_path)
-        Image.fromarray(obs["canvas_annotated_rgb"]).save(grid_path)
         Image.fromarray(obs["rgb_overhead_cam"]).save(overhead_path)
-        Image.fromarray(obs["rgb_third_person_cam"]).save(third_person_path)
 
         timelapse_frames = getattr(env, "timelapse_frames", [])
         if timelapse_frames:
-            pil_frames = [Image.fromarray(f) for f in timelapse_frames]
-            pil_frames[0].save(
-                gif_path,
-                save_all=True,
-                append_images=pil_frames[1:],
-                duration=90,
-                loop=0,
-            )
+            save_optimized_gif(timelapse_frames, gif_path, duration_ms=90)
         else:
             Image.fromarray(obs["rgb_overhead_cam"]).save(gif_path)
 
@@ -80,7 +90,7 @@ class EpisodeRecorder:
                 ink_contact=traj["ink_contact"],
             )
 
-        rel_canvas = f"{ep_dir.name}/canvas_final.png"
+        rel_overhead = f"{ep_dir.name}/overhead_final.png"
         rel_gif = f"{ep_dir.name}/timelapse.gif"
 
         metrics = build_episode_metrics(
@@ -88,7 +98,7 @@ class EpisodeRecorder:
             visual_res=visual_res,
             seed=seed,
             ink_pixels_drawn=int(obs["ink_pixels_drawn"]),
-            canvas_rel_path=rel_canvas,
+            canvas_rel_path=rel_overhead,
             timelapse_rel_path=rel_gif,
         )
 
@@ -113,12 +123,24 @@ class EpisodeRecorder:
         return metrics, ep_dir
 
     def write_summary_report(self, metrics_list: list[EpisodeMetrics]) -> Path:
-        """Write SUMMARY.md and summary_metrics.json inside output_root."""
+        """Write SUMMARY.md and summary_metrics.json aggregating all runs inside output_root."""
+        by_key: dict[tuple[str, int], EpisodeMetrics] = {}
+        for mf in sorted(self.output_root.glob("*_seed*/metrics.json")):
+            try:
+                raw = json.loads(mf.read_text(encoding="utf-8"))
+                em = EpisodeMetrics(**raw)
+                by_key[(em.model, em.seed)] = em
+            except (OSError, ValueError, TypeError):
+                pass
+        for m in metrics_list:
+            by_key[(m.model, m.seed)] = m
+
+        merged = list(by_key.values())
         summary_json_path = self.output_root / "summary_metrics.json"
         with open(summary_json_path, "w", encoding="utf-8") as f:
-            json.dump([m.to_dict() for m in metrics_list], f, indent=2)
+            json.dump([m.to_dict() for m in merged], f, indent=2)
 
-        table_md = format_markdown_summary_table(metrics_list)
+        table_md = format_markdown_summary_table(merged)
         summary_md_path = self.output_root / "SUMMARY.md"
         content = (
             "# PelicanBench Evaluation Summary\n\n"

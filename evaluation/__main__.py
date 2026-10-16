@@ -48,8 +48,8 @@ def main() -> None:
     parser.add_argument(
         "-o",
         dest="out_dir",
-        default="results/sim_benchmark",
-        help="Output directory for dataset bundles and summary report.",
+        default=None,
+        help="Output directory for dataset bundles (defaults to results/sim_benchmark or results/real_benchmark).",
     )
     parser.add_argument(
         "-s",
@@ -85,6 +85,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    out_dir = args.out_dir or f"results/{args.domain}_benchmark"
     repo_root = Path(__file__).resolve().parent.parent
     defaults, configured_models = load_models_config(repo_root / "config" / "models.yaml")
     max_turns = int(args.max_turns if args.max_turns is not None else defaults.get("max_turns", 10))
@@ -104,7 +105,7 @@ def main() -> None:
         else RealWhiteboardEnv(serial_port=args.port, mock_hardware=args.mock_real)
     )
     judge = VisualJudge(vlm_judge_model=args.judge_model)
-    recorder = EpisodeRecorder(output_root=args.out_dir)
+    recorder = EpisodeRecorder(output_root=out_dir)
     all_metrics: list[EpisodeMetrics] = []
 
     try:

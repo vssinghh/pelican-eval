@@ -108,13 +108,14 @@ class RestrictedPythonSandbox:
 
     def __init__(
         self,
-        draw_primitives_fn: Callable[[list[dict[str, Any]]], dict[str, Any]],
+        draw_primitives_fn: Callable[..., dict[str, Any]],
         draw_waypoints_fn: Callable[..., dict[str, Any]],
         select_marker_fn: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self._draw_primitives_fn = draw_primitives_fn
         self._draw_waypoints_fn = draw_waypoints_fn
         self._select_marker_fn = select_marker_fn
+        self._persistent_locals: dict[str, Any] = {}
 
     def run(self, code: str) -> SandboxExecutionResult:
         """Validate and execute user/LLM Python code and return telemetry."""
@@ -125,8 +126,13 @@ class RestrictedPythonSandbox:
         spatial_hallucinations = 0
         warnings: list[str] = []
 
-        def _wrapped_draw_primitives(strokes: list[dict[str, Any]]) -> dict[str, Any]:
+        def _wrapped_draw_primitives(
+            strokes: list[dict[str, Any]],
+            color: str | None = None,
+        ) -> dict[str, Any]:
             nonlocal strokes_executed, waypoints_executed, ink_pixels_added, spatial_hallucinations
+            if color is not None and self._select_marker_fn is not None:
+                self._select_marker_fn(str(color))
             res = self._draw_primitives_fn(strokes)
             strokes_executed += len(strokes)
             waypoints_executed += int(res.get("waypoints_commanded", 0))
@@ -186,6 +192,7 @@ class RestrictedPythonSandbox:
         }
 
         sandbox_globals: dict[str, Any] = {
+            **self._persistent_locals,
             "__builtins__": safe_builtins,
             "np": np,
             "numpy": np,
@@ -196,11 +203,28 @@ class RestrictedPythonSandbox:
             "select_marker": _wrapped_select_marker,
         }
 
+        reserved_keys = {
+            "__builtins__",
+            "np",
+            "numpy",
+            "math",
+            "WORKSPACE_SPEC",
+            "draw_primitives",
+            "draw_waypoints",
+            "select_marker",
+        }
+
         try:
             _validate_ast_safety(code)
             with redirect_stdout(stdout_buf):
                 exec(compile(code, "<pelican_sandbox>", "exec"), sandbox_globals)  # noqa: S102
+            for k, v in sandbox_globals.items():
+                if k not in reserved_keys and not k.startswith("__"):
+                    self._persistent_locals[k] = v
         except Exception as exc:  # noqa: BLE001
+            for k, v in sandbox_globals.items():
+                if k not in reserved_keys and not k.startswith("__"):
+                    self._persistent_locals[k] = v
             tb_short = "".join(traceback.format_exception_only(type(exc), exc)).strip()
             return SandboxExecutionResult(
                 success=False,

@@ -1,0 +1,43 @@
+{
+  "model": "gemini/gemini-3.8-flash",
+  "provider": "Google",
+  "domain": "sim",
+  "seed": 0,
+  "total_hallucinations": 0,
+  "spatial_hallucinations": 0,
+  "code_hallucinations": 0,
+  "total_tool_calls": 8,
+  "tool_call_counts": {
+    "get_workspace_detail": 2,
+    "select_marker": 0,
+    "draw_primitives": 0,
+    "draw_waypoints": 0,
+    "run_python": 5,
+    "finish_drawing": 1
+  },
+  "e2e_time_s": 162.008,
+  "cost_usd": 0.147552,
+  "visual_score": 10.0,
+  "visual_breakdown": {
+    "wheels_score": 2.0,
+    "bicycle_frame_score": 2.0,
+    "pelican_head_beak_score": 2.0,
+    "pelican_body_limbs_score": 2.0,
+    "riding_composition_score": 2.0,
+    "total_score": 10.0,
+    "evaluator_type": "deterministic_spatial",
+    "rationale": "Total ink=46386px (wheels=12066+15319px, frame=19077px, body=14654px, head_beak=15846px)."
+  },
+  "prompt_tokens": 131904,
+  "completion_tokens": 22118,
+  "ink_pixels_drawn": 48709,
+  "colors_used": [
+    "black",
+    "blue",
+    "red"
+  ],
+  "marker_swaps": 2,
+  "finished_cleanly": true,
+  "canvas_path": "gemini_gemini_3_8_flash_seed0/overhead_final.png",
+  "timelapse_path": "gemini_gemini_3_8_flash_seed0/timelapse.gif"
+}

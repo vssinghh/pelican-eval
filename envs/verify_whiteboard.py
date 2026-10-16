@@ -10,7 +10,6 @@ from PIL import Image
 
 from envs.real_env import RealWhiteboardEnv
 from envs.sim_env import SimWhiteboardEnv
-from harness.tools import WhiteboardToolBelt
 
 
 def get_reference_pelican_strokes() -> list[dict[str, Any]]:
@@ -208,6 +207,9 @@ def main() -> None:
     )
 
     try:
+        from evaluation.recorder import save_optimized_gif
+        from harness.tools import WhiteboardToolBelt
+
         env.reset()
         toolbelt = WhiteboardToolBelt(env)
         strokes = get_reference_pelican_strokes()
@@ -215,19 +217,13 @@ def main() -> None:
         env.move_to_home()
         obs = env.get_obs()
 
-        Image.fromarray(obs["canvas_rgb"]).save(out_dir / "reference_canvas.png")
-        Image.fromarray(obs["canvas_annotated_rgb"]).save(out_dir / "reference_canvas_grid.png")
         Image.fromarray(obs["rgb_overhead_cam"]).save(out_dir / "reference_overhead.png")
-        Image.fromarray(obs["rgb_third_person_cam"]).save(out_dir / "reference_third_person.png")
 
         if env.timelapse_frames:
-            pil_frames = [Image.fromarray(f) for f in env.timelapse_frames]
-            pil_frames[0].save(
+            save_optimized_gif(
+                env.timelapse_frames,
                 out_dir / "reference_timelapse.gif",
-                save_all=True,
-                append_images=pil_frames[1:],
-                duration=80,
-                loop=0,
+                duration_ms=80,
             )
 
         print(f"Verification complete in domain='{args.domain}':")
