@@ -28,6 +28,7 @@ htmlcov/
 # Evaluation outputs and heavy trajectory logs
 results/*.npz
 results/**/*.npz
+outputs/live/
 *.mp4
 
 # IDE and OS files

@@ -1,31 +1,35 @@
 {
-  "serial_port": "/dev/tty.usbmodem5B790143431",
-  "plane_equation": "Z_board(X, Y) = a * X + b * Y + c",
   "plane_coeffs_abc": [
-    -0.0,
-    -0.0,
-    0.005
+    -0.08,
+    0.0,
+    0.0024
   ],
-  "recorded_corners_xyz": [
-    [
-      0.16,
-      0.14,
-      0.005
-    ],
-    [
-      0.16,
+  "single_marker_mode": true,
+  "interactive_holder_swap": true,
+  "pickup_on_reset": true,
+  "pickup_ticks": [
+    2495,
+    1698,
+    2859,
+    1909,
+    973
+  ],
+  "target_pitch": 0.95,
+  "marker_slots_xyz": {
+    "blue": [
+      0.165,
       -0.14,
       0.005
     ],
-    [
-      0.3,
-      0.14,
+    "red": [
+      0.165,
+      -0.14,
       0.005
     ],
-    [
-      0.3,
+    "green": [
+      0.165,
       -0.14,
       0.005
     ]
-  ]
+  }
 }

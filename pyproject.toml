@@ -21,6 +21,8 @@ dependencies = [
     "pyyaml>=6.0.0",
     "python-dotenv>=1.0.0",
     "litellm>=1.40.0",
+    "opencv-python>=5.0.0.93",
+    "feetech-servo-sdk>=1.0.0",
 ]
 
 [project.optional-dependencies]

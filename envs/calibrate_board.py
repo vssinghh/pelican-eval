@@ -61,6 +61,7 @@ def main() -> None:
         pts = np.array([c[1] for c in corners], dtype=np.float64)
     else:
         env = RealWhiteboardEnv(serial_port=args.port, mock_hardware=False)
+        env.set_torque(False)
         solver = SO101IKSolver(site_name="pen_tip")
         recorded: list[np.ndarray] = []
         try:

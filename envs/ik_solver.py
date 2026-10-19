@@ -82,10 +82,17 @@ class SO101IKSolver:
         target_pitch: float | None = None,
         q_init: np.ndarray | None = None,
         gripper_norm: float | None = None,
+        exact_pitch: bool = False,
     ) -> IKResult:
         """Solve for the 5 arm joint angles that place pen_tip at target_xyz."""
         tgt = np.asarray(target_xyz, dtype=np.float64).reshape(3)
-        pitch_goal = self.target_pitch if target_pitch is None else float(target_pitch)
+        raw_pitch_goal = self.target_pitch if target_pitch is None else float(target_pitch)
+        if not exact_pitch and raw_pitch_goal < 1.25:
+            r_xy = float(np.hypot(tgt[0], tgt[1]))
+            alpha = float(np.clip((r_xy - 0.180) / 0.035, 0.0, 1.0))
+            pitch_goal = (1.0 - alpha) * 1.25 + alpha * raw_pitch_goal
+        else:
+            pitch_goal = raw_pitch_goal
         g_norm = self.gripper_norm if gripper_norm is None else float(gripper_norm)
 
         mujoco.mj_resetData(self.model, self.data)

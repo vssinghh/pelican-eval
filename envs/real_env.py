@@ -25,7 +25,6 @@ from envs.base import (
     is_xy_in_bounds,
     norm_gripper_to_raw,
     radians_to_ticks,
-    raw_gripper_to_norm,
     ticks_to_radians,
     xy_to_canvas_px,
 )
@@ -38,30 +37,46 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
 
     BG_COLOR_RGB: tuple[int, int, int] = (250, 250, 252)
 
+    MOTOR_NAMES: tuple[str, ...] = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+        "gripper",
+    )
+
     def __init__(
         self,
         serial_port: str = "/dev/tty.usbmodem5B790143431",
         baudrate: int = 1_000_000,
         calibration_path: str | Path | None = None,
+        lerobot_calib_path: str | Path | None = None,
         camera_indices: dict[str, int] | None = None,
         control_hz: int = 20,
         camera_resolution: tuple[int, int] = (640, 480),
         zero_offsets: np.ndarray | None = None,
         mock_hardware: bool = False,
     ) -> None:
-        """Initialize the physical SO-ARM101 follower arm, plane calibration, and USB webcam."""
+        """Initialize the physical SO-ARM101 follower arm, plane calibration, and USB webcams."""
         self.serial_port = serial_port
         self.baudrate = int(baudrate)
         self.control_hz = int(control_hz)
         self.step_dt = 1.0 / float(self.control_hz)
         self.camera_resolution = camera_resolution
         self.mock_hardware = bool(mock_hardware)
-        self.zero_offsets = (
-            np.asarray(zero_offsets, dtype=np.float32)
-            if zero_offsets is not None
-            else np.full(6, float(STS3215_CENTER_TICK), dtype=np.float32)
-        )
-        self.camera_indices = camera_indices or {"overhead_cam": 0}
+        self.camera_indices = camera_indices or {"overhead_cam": 0, "third_person_cam": 1}
+
+        self.range_min = np.array([660, 850, 998, 935, 0, 2028], dtype=np.float32)
+        self.range_max = np.array([3395, 2852, 3072, 2925, 4095, 3212], dtype=np.float32)
+        self._load_lerobot_motor_calibration(lerobot_calib_path)
+
+        if zero_offsets is not None:
+            self.zero_offsets = np.asarray(zero_offsets, dtype=np.float32)
+        else:
+            self.zero_offsets = 0.5 * (self.range_min + self.range_max)
+            self.zero_offsets[4] = 1997.0
+            self.zero_offsets[5] = float(STS3215_CENTER_TICK)
 
         if calibration_path is None:
             repo_root = Path(__file__).resolve().parent.parent
@@ -70,9 +85,19 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         self.marker_slots_xyz: dict[str, list[float]] = {
             k: list(v) for k, v in MARKER_DOCK_SLOTS_XYZ.items()
         }
+        self.single_marker_mode: bool = False
+        self.interactive_holder_swap: bool = False
+        self.pickup_on_reset: bool = False
+        self.pickup_ticks: list[int] = [2495, 1698, 2859, 1909, 973]
+        self.target_pitch: float = 1.35
         self.plane_coeffs: tuple[float, float, float] = self._load_calibration()
+        self.home_proprio_6d: np.ndarray = (
+            HOME_PROPRIO_6D.copy()
+            if self.mock_hardware
+            else np.array([0.70, -1.05, 1.40, 0.03, -np.pi / 2.0, GRIPPER_NORM_GRASP], dtype=np.float32)
+        )
 
-        self.ik_solver = SO101IKSolver(site_name="pen_tip")
+        self.ik_solver = SO101IKSolver(site_name="pen_tip", target_pitch=self.target_pitch)
 
         self.canvas_h = int(WORKSPACE_SPEC["canvas_resolution_px"]["height"])
         self.canvas_w = int(WORKSPACE_SPEC["canvas_resolution_px"]["width"])
@@ -99,8 +124,34 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         if not self.mock_hardware:
             self._connect_hardware()
 
+    def _load_lerobot_motor_calibration(self, lerobot_calib_path: str | Path | None) -> None:
+        """Load per-motor range_min and range_max from LeRobot's so_101_follower.json if present."""
+        path = (
+            Path(lerobot_calib_path)
+            if lerobot_calib_path is not None
+            else Path.home()
+            / ".cache"
+            / "huggingface"
+            / "lerobot"
+            / "calibration"
+            / "robots"
+            / "so_follower"
+            / "so_101_follower.json"
+        )
+        if not path.exists():
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            for idx, name in enumerate(self.MOTOR_NAMES):
+                if name in data:
+                    self.range_min[idx] = float(data[name].get("range_min", self.range_min[idx]))
+                    self.range_max[idx] = float(data[name].get("range_max", self.range_max[idx]))
+        except (OSError, ValueError, TypeError):
+            pass
+
     def _load_calibration(self) -> tuple[float, float, float]:
-        """Load 4-corner plane fit and optional 3-slot marker dock coordinates from calibration.json."""
+        """Load 4-corner plane fit and optional marker pickup/dock settings from calibration.json."""
         if self.calibration_path.exists():
             with open(self.calibration_path, encoding="utf-8") as f:
                 data = json.load(f)
@@ -108,6 +159,19 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
                 for color_key, pt in data["marker_slots_xyz"].items():
                     if color_key in self.marker_slots_xyz and len(pt) == 3:
                         self.marker_slots_xyz[color_key] = [float(pt[0]), float(pt[1]), float(pt[2])]
+            self.single_marker_mode = bool(data.get("single_marker_mode", False))
+            self.interactive_holder_swap = bool(data.get("interactive_holder_swap", False))
+            self.pickup_on_reset = bool(data.get("pickup_on_reset", False))
+            if "pickup_ticks" in data and isinstance(data["pickup_ticks"], list) and len(data["pickup_ticks"]) == 5:
+                self.pickup_ticks = [int(v) for v in data["pickup_ticks"]]
+            if (
+                "zero_offsets_ticks" in data
+                and isinstance(data["zero_offsets_ticks"], list)
+                and len(data["zero_offsets_ticks"]) == 6
+            ):
+                self.zero_offsets = np.array(data["zero_offsets_ticks"], dtype=np.float32)
+            if "target_pitch" in data:
+                self.target_pitch = float(data["target_pitch"])
             coeffs = data.get("plane_coeffs_abc", [0.0, 0.0, float(WORKSPACE_SPEC["z_draw_m"])])
             return (float(coeffs[0]), float(coeffs[1]), float(coeffs[2]))
         return (0.0, 0.0, float(WORKSPACE_SPEC["z_draw_m"]))
@@ -119,7 +183,11 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         z_nominal_draw = float(WORKSPACE_SPEC["z_draw_m"])
         z_calibrated_board = a * x + b * y + c
         dz = z_calibrated_board - z_nominal_draw
-        return np.array([x, y, z + dz], dtype=np.float64)
+        z_phys = z + dz
+        if self.single_marker_mode:
+            # Guard against pressing deeper than 2 mm below the calibrated paper contact plane
+            z_phys = max(z_phys, z_calibrated_board - 0.002)
+        return np.array([x, y, z_phys], dtype=np.float64)
 
     def _connect_hardware(self) -> None:
         """Open Feetech STS3215 USB serial bus and USB camera streams."""
@@ -127,26 +195,43 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
             import scservo_sdk as scs  # type: ignore[import-not-found]
         except ImportError as exc:
             raise RuntimeError(
-                "feetech-servo-sdk (scservo_sdk) is required for physical SO-ARM101 deployment. "
-                "Activate so101-setup/.venv or pass mock_hardware=True for offline tests."
+                "feetech-servo-sdk (scservo_sdk) is required for physical SO-ARM101 deployment."
             ) from exc
 
         self._port_handler = scs.PortHandler(self.serial_port)
-        self._packet_handler = scs.sms_sts(self._port_handler)
+        self._packet_handler = scs.PacketHandler(0)
         if not self._port_handler.openPort() or not self._port_handler.setBaudRate(self.baudrate):
             raise RuntimeError(
                 f"Failed to open SO-ARM101 serial port {self.serial_port} at {self.baudrate} baud."
             )
 
+        # Set firm 75% clamping torque limit on gripper motor (ID 6)
+        self._packet_handler.write2ByteTxRx(self._port_handler, 6, 48, 750)
+
         try:
             import cv2  # type: ignore[import-not-found]
 
+            w, h = self.camera_resolution
             for cam_name, dev_idx in self.camera_indices.items():
                 cap = cv2.VideoCapture(dev_idx)
                 if cap.isOpened():
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(w))
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(h))
+                    cap.set(cv2.CAP_PROP_FPS, 15.0)
+                    for _ in range(3):
+                        cap.read()
                     self._captures[cam_name] = cap
         except ImportError:
             pass
+
+    def set_torque(self, enabled: bool, keep_gripper: bool = False) -> None:
+        """Enable or disable servo torque on the Feetech STS3215 motors."""
+        if self.mock_hardware or self._port_handler is None or self._packet_handler is None:
+            return
+        val = 1 if enabled else 0
+        end_id = 6 if (not enabled and keep_gripper) else 7
+        for servo_id in range(1, end_id):
+            self._packet_handler.write1ByteTxRx(self._port_handler, servo_id, 40, val)
 
     def _read_proprio_6d(self) -> np.ndarray:
         """Read 6 Feetech STS3215 encoders and convert to [5x radians, 1x normalized gripper]."""
@@ -155,13 +240,14 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
 
         ticks = np.zeros(6, dtype=np.int32)
         for servo_id in range(1, 7):
-            pos, _, _ = self._packet_handler.ReadPosSpeed(servo_id)
+            pos, _, _ = self._packet_handler.read2ByteTxRx(self._port_handler, servo_id, 56)
             ticks[servo_id - 1] = int(pos)
 
         rads = ticks_to_radians(ticks, self.zero_offsets)
         proprio = np.zeros(6, dtype=np.float32)
         proprio[:5] = rads[:5]
-        proprio[5] = raw_gripper_to_norm(float(rads[5]))
+        g_span = max(1.0, float(self.range_max[5] - self.range_min[5]))
+        proprio[5] = float(np.clip((ticks[5] - self.range_min[5]) / g_span, 0.0, 1.0))
         return proprio
 
     def _write_action_6d(self, action_6d: np.ndarray) -> None:
@@ -172,14 +258,111 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
 
         raw_rads = np.asarray(action_6d, dtype=np.float32).copy()
         raw_rads[5] = norm_gripper_to_raw(float(action_6d[5]))
-        target_ticks = radians_to_ticks(raw_rads, self.zero_offsets)
+        target_ticks = radians_to_ticks(raw_rads, self.zero_offsets).astype(np.float32)
+        g_norm = float(np.clip(action_6d[5], 0.0, 1.0))
+        target_ticks[5] = self.range_min[5] + g_norm * (self.range_max[5] - self.range_min[5])
+        clamped_ticks = np.clip(np.round(target_ticks), self.range_min, self.range_max).astype(np.int32)
+        if g_norm <= GRIPPER_NORM_GRASP + 0.05:
+            # Command 1700 so the STS3215 proportional loop saturates at full 75% clamping torque
+            clamped_ticks[5] = 1700
+
         for servo_id in range(1, 7):
-            self._packet_handler.WritePosEx(
-                servo_id, int(target_ticks[servo_id - 1]), 2200, 45
+            self._packet_handler.write2ByteTxRx(
+                self._port_handler, servo_id, 42, int(clamped_ticks[servo_id - 1])
             )
 
+    def pickup_marker_from_desk(self) -> dict[str, Any]:
+        """Clamp the marker resting in the figurine holder at 75% torque and lift straight up."""
+        if self.mock_hardware:
+            self._holding_marker = True
+            return {"picked_up": True, "pickup_ticks": self.pickup_ticks}
+
+        self.set_torque(True)
+        self._packet_handler.write2ByteTxRx(self._port_handler, 6, 48, 750)
+
+        p0, p1, p2, p3, p4 = self.pickup_ticks
+        open_tick = int(self.range_max[5] - 65)
+        grasp_pose = np.array([p0, p1, p2, p3, p4, open_tick], dtype=float)
+        lift_up = np.array(
+            [p0, max(1100, p1 - 450), max(2500, p2 - 100), min(2300, p3 + 210), p4, 1700],
+            dtype=float,
+        )
+
+        # 1. Ensure arm is at the figurine holder pose with open jaws if not already there
+        cur = np.array(
+            [self._packet_handler.read2ByteTxRx(self._port_handler, i + 1, 56)[0] for i in range(6)],
+            dtype=float,
+        )
+        if float(np.max(np.abs(cur[:5] - grasp_pose[:5]))) > 35.0:
+            for step_idx in range(1, 21):
+                alpha = float(step_idx) / 20.0
+                cmd = np.round((1.0 - alpha) * cur + alpha * grasp_pose).astype(int)
+                for i in range(6):
+                    self._packet_handler.write2ByteTxRx(self._port_handler, i + 1, 42, int(cmd[i]))
+                time.sleep(0.04)
+            time.sleep(0.2)
+
+        # 2. Clamp Motor 6 firmly onto barrel in place (Goal_Position = 1700 for full 75% torque)
+        for g_cmd in (2500, 2150, 1700):
+            self._packet_handler.write2ByteTxRx(self._port_handler, 6, 42, g_cmd)
+            time.sleep(0.3)
+
+        # 3. Lift marker smoothly straight up and out of the figurine holder
+        grasp_closed = grasp_pose.copy()
+        grasp_closed[5] = 1700.0
+        for step_idx in range(1, 21):
+            alpha = float(step_idx) / 20.0
+            cmd = np.round((1.0 - alpha) * grasp_closed + alpha * lift_up).astype(int)
+            cmd[5] = 1700
+            for i in range(6):
+                self._packet_handler.write2ByteTxRx(self._port_handler, i + 1, 42, int(cmd[i]))
+            time.sleep(0.04)
+        time.sleep(0.3)
+        self._holding_marker = True
+        grip_pos, _, _ = self._packet_handler.read2ByteTxRx(self._port_handler, 6, 56)
+        return {"picked_up": True, "gripper_tick": int(grip_pos)}
+
+    def release_marker_at_holder(self) -> dict[str, Any]:
+        """Move the arm to the figurine holder pose and open the jaws for marker handoff/swap."""
+        if self.mock_hardware:
+            self._holding_marker = False
+            return {"released": True}
+
+        p0, p1, p2, p3, p4 = self.pickup_ticks
+        open_tick = int(self.range_max[5] - 65)
+        holder_pose = np.array([p0, p1, p2, p3, p4, 1700], dtype=float)
+
+        cur = np.array(
+            [self._packet_handler.read2ByteTxRx(self._port_handler, i + 1, 56)[0] for i in range(6)],
+            dtype=float,
+        )
+        cur[5] = 1700.0
+        for step_idx in range(1, 21):
+            alpha = float(step_idx) / 20.0
+            cmd = np.round((1.0 - alpha) * cur + alpha * holder_pose).astype(int)
+            cmd[5] = 1700
+            for i in range(6):
+                self._packet_handler.write2ByteTxRx(self._port_handler, i + 1, 42, int(cmd[i]))
+            time.sleep(0.04)
+        time.sleep(0.3)
+
+        # Open gripper jaws and stay parked directly above the figurine hands for the next marker
+        self._packet_handler.write2ByteTxRx(self._port_handler, 6, 42, open_tick)
+        time.sleep(0.4)
+        self._holding_marker = False
+        return {"released": True}
+
+    def _make_timelapse_frame(self, obs: dict[str, Any]) -> np.ndarray:
+        """Create a side-by-side (third_person_cam | overhead_cam) frame for GIF recording."""
+        tp = Image.fromarray(obs["rgb_third_person_cam"]).resize((400, 300))
+        ov = Image.fromarray(obs["rgb_overhead_cam"]).resize((400, 300))
+        combined = Image.new("RGB", (800, 300))
+        combined.paste(tp, (0, 0))
+        combined.paste(ov, (400, 0))
+        return np.asarray(combined, dtype=np.uint8)
+
     def reset(self, seed: int | None = None) -> dict[str, Any]:
-        """Move physical arm to HOME_PROPRIO_6D and initialize tracking canvas."""
+        """Move physical arm smoothly to unobstructed home pose and initialize tracking canvas."""
         del seed
         self._canvas_pil = Image.new("RGB", (self.canvas_w, self.canvas_h), self.BG_COLOR_RGB)
         self._canvas_draw = ImageDraw.Draw(self._canvas_pil)
@@ -195,11 +378,16 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         self.ink_pixels_drawn = 0
         self.timelapse_frames.clear()
 
-        self._write_action_6d(HOME_PROPRIO_6D)
         if not self.mock_hardware:
-            time.sleep(0.8)
+            self.set_torque(True)
+            if self.pickup_on_reset:
+                self.pickup_marker_from_desk()
+            self.move_to_home()
+        else:
+            self._write_action_6d(HOME_PROPRIO_6D)
+
         obs = self.get_obs()
-        self.timelapse_frames.append(obs["rgb_overhead_cam"].copy())
+        self.timelapse_frames.append(self._make_timelapse_frame(obs))
         return obs
 
     def step(self, action_6d: np.ndarray) -> dict[str, Any]:
@@ -215,7 +403,12 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
 
         proprio = self._read_proprio_6d()
         tip_xyz = self.ik_solver.forward_kinematics(proprio[:5])
-        z_contact_thresh = float(WORKSPACE_SPEC["z_contact_threshold_m"])
+        a, b, c = self.plane_coeffs
+        z_board_xy = a * float(tip_xyz[0]) + b * float(tip_xyz[1]) + c
+        contact_margin = float(WORKSPACE_SPEC["z_contact_threshold_m"]) - float(
+            WORKSPACE_SPEC["z_draw_m"]
+        )
+        z_contact_thresh = z_board_xy + contact_margin
         active_ink_rgb = MARKER_COLORS_RGB[self.current_marker_color]
         in_contact = bool(
             self._holding_marker
@@ -292,6 +485,31 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         new_slot = self.marker_slots_xyz[target_color]
         z_hover = float(MARKER_DOCK_HOVER_Z)
 
+        if self.single_marker_mode:
+            if not self.mock_hardware and self.interactive_holder_swap:
+                if self._holding_marker:
+                    self.release_marker_at_holder()
+                print(
+                    f"\n[MARKER SWAP] Please place the '{target_color.upper()}' marker "
+                    "(uncapped, tip down) into the blue figurine holder and press Enter..."
+                )
+                try:
+                    input()
+                except EOFError:
+                    pass
+                self.pickup_marker_from_desk()
+                self.move_to_home()
+            self.current_marker_color = target_color
+            self.marker_swaps += 1
+            return {
+                "swapped": True,
+                "previous_color": prev_color,
+                "active_color": self.current_marker_color,
+                "dock_slot_xyz_m": new_slot,
+                "marker_swaps": self.marker_swaps,
+                "colors_used": sorted(self.colors_used),
+            }
+
         # 1. Lift vertically from current position to safe dock hover height
         proprio = self._read_proprio_6d()
         cur_tip = self.ik_solver.forward_kinematics(proprio[:5])
@@ -332,7 +550,7 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         }
 
     def move_to_home(self) -> None:
-        """Lift marker above board first, then return smoothly to HOME_PROPRIO_6D."""
+        """Lift marker above board first, then return smoothly to unobstructed home pose."""
         proprio = self._read_proprio_6d()
         cur_tip = self.ik_solver.forward_kinematics(proprio[:5])
         z_up = float(WORKSPACE_SPEC["z_up_m"])
@@ -344,7 +562,10 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         q_start = self._read_proprio_6d()
         for step_idx in range(1, 7):
             alpha = float(step_idx) / 6.0
-            self.step((1.0 - alpha) * q_start + alpha * HOME_PROPRIO_6D)
+            self.step((1.0 - alpha) * q_start + alpha * self.home_proprio_6d)
+
+        obs = self.get_obs()
+        self.timelapse_frames.append(self._make_timelapse_frame(obs))
 
     def execute_cartesian_path(
         self,
@@ -407,7 +628,7 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
 
         final_tip = self.ik_solver.forward_kinematics(q_prev)
         obs = self.get_obs()
-        self.timelapse_frames.append(obs["rgb_overhead_cam"].copy())
+        self.timelapse_frames.append(self._make_timelapse_frame(obs))
 
         return {
             "waypoints_commanded": len(raw_pts),
@@ -486,7 +707,8 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         }
 
     def close(self) -> None:
-        """Release camera captures and serial port."""
+        """Disable servo torque and release camera captures and serial port."""
+        self.set_torque(False)
         for cap in self._captures.values():
             cap.release()
         self._captures.clear()
