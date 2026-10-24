@@ -124,3 +124,37 @@ Once `Reg 56` (`2075..2150`), `Reg 60` (`>= 200`), and `Camera 2` confirm a flat
 uv run python scripts/so101_cli.py move-polar <pan_tick> <grasp_reach_m> 0.130 0.85 1700 step5_lift
 ```
 Inspect `outputs/live/step5_lift_cam_0_grid.png`, `outputs/live/step5_lift_cam_1_grid.png`, and `outputs/live/step5_lift_cam_2_grid.png` to confirm the bottom tip of the marker is completely clear of the figurine holder in mid-air and `gripper_present_position_reg56` remains in `[2075, 2150]`.
+
+***
+
+## 4. Failure Handling and Human-in-the-Loop Escalation
+
+The horizontal pinch configuration (`wrist_roll = 973`) is designed strictly to grasp an **upright** marker from an intact holder. Never loop indefinitely or attempt to chase a fallen marker across the desk. Distinguish between minor alignment misses (autonomous retry) and unrecoverable workspace faults (human assistance).
+
+### 4.1 When to Escalate Immediately to the Human Operator (Zero Blind Retries)
+Stop autonomous retries immediately and ask the human for help if any of the following conditions appear in `Camera 0`, `Camera 1`, `Camera 2`, or the JSON telemetry:
+1. **Holder Tilted, Knocked Over, or Lifted**: The figurine or cup holder is lying on its side, tilted noticeably, or being lifted/dragged along with the marker during `Step 5` extraction (for example, if the marker was wedged inside the figurine).
+2. **Marker Fallen Flat, Dropped, or Missing**: The marker is lying horizontally on the table, has rolled out of camera view, or slipped out of the gripper during lift (`Reg 56` drops to `<= 2055` during `Step 5`).
+3. **Marker Caught at an Unusable Angle**: After lifting (`Step 5`), `Camera 1` shows the marker skewed sharply (`> 20 degrees` from vertical) or caught by its top tip such that it cannot be calibrated perpendicular to the paper.
+4. **Two Consecutive Grasp Misses (`>= 2` failed clamp attempts)**: Even if the marker and holder remain upright, if two closed-loop adjustments fail to achieve `2075 <= Reg 56 <= 2150` and `Reg 60 >= 200`, stop and ask the human rather than risking a collision on a third attempt.
+5. **USB or Servo Fault**: `FOLLOWER_USB_NOT_FOUND`, `SERVOS_NOT_RESPONDING`, `Reg 56 = -1`, or servo overload trip.
+
+### 4.2 Safe Park and Operator Prompt Protocol
+Before asking the human to reach into the workspace, always clear the arm out of the way so the operator has unobstructed hand access and no wedged object is flung upward:
+
+1. **Execute `safe-park`**:
+   * If the marker is still in the holder, wedged, or dropped on the table (`release` mode opens the gripper in place first before lifting to the high park pose `[2048, 1000, 3000, 2600, 973, 3145]`):
+     ```bash
+     uv run python scripts/so101_cli.py safe-park release park_for_human
+     ```
+   * If the marker is already lifted into mid-air (`z_m >= 0.110 m`) but held at a bad angle and you want the arm to keep holding it until the human takes or straightens it (`keep` mode preserves the current gripper clamp while moving to the high park pose):
+     ```bash
+     uv run python scripts/so101_cli.py safe-park keep park_for_human
+     ```
+2. **Prompt the Human Clearly**:
+   In your message to the user, include:
+   * **What happened**: A brief diagnosis referencing `outputs/live/park_for_human_cam_0_grid.png` and `outputs/live/park_for_human_cam_1_grid.png` (for example: *"The blue figurine tilted during approach and the marker is now leaning at an angle"*).
+   * **Safety confirmation**: Confirm that the arm has parked safely in the high home pose away from the holder.
+   * **Requested action**: Specify the exact reset needed (for example: *"Please stand the blue figurine upright and place the marker vertically in its holder, then reply so I can resume"*).
+3. **Resume from Step 1 (`status`)**:
+   Once the human confirms that the holder and marker have been reset, always restart from **Step 1 (`status`)** to re-observe the workspace from scratch. Never reuse stale `pan_tick` or `reach_m` coordinates after a manual reset.

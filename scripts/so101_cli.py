@@ -7,8 +7,10 @@ without hardcoded workspace coordinates.
 Usage:
     uv run python scripts/so101_cli.py status [out_prefix]
     uv run python scripts/so101_cli.py move-ticks <t1> <t2> <t3> <t4> <t5> <t6> [out_prefix]
+    uv run python scripts/so101_cli.py move-polar <pan_tick> <reach_m> <z_m> <pitch_rad> <gripper_tick> [out_prefix]
     uv run python scripts/so101_cli.py move-ik <x> <y> <z> <pitch_rad> <gripper_tick> [out_prefix]
     uv run python scripts/so101_cli.py gripper <open|clamp|tick> [out_prefix]
+    uv run python scripts/so101_cli.py safe-park [release|keep] [out_prefix]
     uv run python scripts/so101_cli.py relax
 """
 
@@ -592,6 +594,32 @@ def main() -> None:
             # 5. Retract to straight-ahead high unobstructed pose so Camera 0 sees the full sheet
             unobstructed_ticks = [1950, 1250, 2980, 2100, 973, 1700]
             smooth_move_ticks(ser, unobstructed_ticks, steps=40, dt=0.025)
+            report_status(ser, solver, prefix, default_out)
+
+        elif cmd == "safe-park":
+            mode = sys.argv[2] if len(sys.argv) >= 3 else "release"
+            prefix = sys.argv[3] if len(sys.argv) >= 4 else "safe_park"
+            cur_ticks = read_all_ticks(ser)
+            target_g = int(cur_ticks[5]) if mode == "keep" else 3145
+            if mode != "keep" and int(cur_ticks[5]) < 2900:
+                # Open Motor 6 in place first so a wedged marker or tipped holder is never flung upward
+                write_u8(ser, 6, 55, 0)
+                write_u8(ser, 6, 34, 75)
+                write_u8(ser, 6, 36, 75)
+                write_u8(ser, 6, 55, 1)
+                write_u16(ser, 6, 48, 750)
+                write_u8(ser, 6, 40, 1)
+                start_g = int(cur_ticks[5])
+                for s in range(1, 21):
+                    alpha = s / 20.0
+                    w = 0.5 * (1.0 - np.cos(np.pi * alpha))
+                    g_interp = int(round((1.0 - w) * start_g + w * 3145))
+                    write_u16(ser, 6, 42, g_interp)
+                    time.sleep(0.020)
+                time.sleep(0.25)
+                cur_ticks = read_all_ticks(ser)
+            park_ticks = [2048, 1000, 3000, 2600, 973, target_g]
+            smooth_move_ticks(ser, park_ticks, steps=40, dt=0.025)
             report_status(ser, solver, prefix, default_out)
 
         elif cmd == "relax":
