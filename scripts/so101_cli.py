@@ -174,7 +174,7 @@ def smooth_move_ticks(
     for m in range(1, 6):
         if cur_ticks[m - 1] < 0:
             raise RuntimeError(f"Failed to read Motor {m} Present_Position (Reg 56)")
-        write_u16(ser, m, 48, 500)
+        write_u16(ser, m, 48, 800)
         write_u8(ser, m, 40, 1)
     # Configure Motor 6 (gripper) for continuous 75% holding torque
     write_u8(ser, 6, 55, 0)
@@ -183,28 +183,65 @@ def smooth_move_ticks(
     write_u8(ser, 6, 55, 1)
     write_u16(ser, 6, 48, 750)
     write_u8(ser, 6, 40, 1)
+    if int(cur_ticks[5]) < 2600 and int(target_ticks[5]) <= 1850:
+        cur_ticks[5] = int(target_ticks[5])
 
     pan_delta = abs(int(target_ticks[0]) - int(cur_ticks[0]))
     max_lift_tick = max(int(cur_ticks[1]), int(target_ticks[1]))
-    if pan_delta > 80 and max_lift_tick > 1350:
-        # 2-stage overhead arc: retract/lift while panning Motor 1 so we never sweep low
-        safe_mid = [
+    max_elbow_tick = max(int(cur_ticks[2]), int(target_ticks[2]))
+    if pan_delta > 80 and (max_lift_tick > 1150 or max_elbow_tick > 2750):
+        # High-clearance overhead arc (z >= 0.115 m):
+        # 1) Lift vertically at current pan if starting low
+        # 2) Pan Motor 1 at high elevation (shoulder_lift <= 1050, elbow_flex <= 2650)
+        # 3) Descend vertically at target pan
+        wp = list(cur_ticks)
+        if int(cur_ticks[1]) > 1150 or int(cur_ticks[2]) > 2750:
+            safe_up_start = [
+                int(cur_ticks[0]),
+                min(int(cur_ticks[1]), 1050),
+                min(int(cur_ticks[2]), 2650),
+                2450,
+                973,
+                int(cur_ticks[5]),
+            ]
+            _interpolate_ticks(ser, wp, safe_up_start, steps=max(20, steps // 2), dt=dt)
+            time.sleep(0.08)
+            wp = safe_up_start
+        safe_up_end = [
             int(target_ticks[0]),
-            min(int(cur_ticks[1]), 1250),
-            max(int(cur_ticks[2]), 2980),
-            2100,
+            min(int(target_ticks[1]), 1050),
+            min(int(target_ticks[2]), 2650),
+            int(target_ticks[3]),
             973,
             int(target_ticks[5]),
         ]
-        _interpolate_ticks(ser, cur_ticks, safe_mid, steps=max(25, steps // 2), dt=dt)
-        time.sleep(0.10)
-        _interpolate_ticks(ser, safe_mid, target_ticks, steps=steps, dt=dt)
+        _interpolate_ticks(ser, wp, safe_up_end, steps=max(25, steps // 2), dt=dt)
+        time.sleep(0.08)
+        _interpolate_ticks(ser, safe_up_end, target_ticks, steps=max(20, steps // 2), dt=dt)
     else:
         _interpolate_ticks(ser, cur_ticks, target_ticks, steps=steps, dt=dt)
-    time.sleep(0.25)
+    time.sleep(0.20)
+
+    # Closed-loop steady-state tick trim on Motors 1..5 to eliminate gravity sag and static friction deadband
+    cmd_ticks = [int(v) for v in target_ticks]
+    for _ in range(2):
+        actual = read_all_ticks(ser)
+        if any(actual[m] < 0 for m in range(5)):
+            break
+        errs = [int(target_ticks[m]) - int(actual[m]) for m in range(5)]
+        if max(abs(e) for e in errs) <= 3:
+            break
+        next_cmd = list(cmd_ticks)
+        for m in range(5):
+            if abs(errs[m]) > 2:
+                corr = int(np.clip( np.round(0.75 * errs[m]), -30, 30 ))
+                next_cmd[m] = int(np.clip(cmd_ticks[m] + corr, int(target_ticks[m]) - 55, int(target_ticks[m]) + 55))
+        _interpolate_ticks(ser, cmd_ticks, next_cmd, steps=8, dt=0.020)
+        cmd_ticks = next_cmd
+        time.sleep(0.12)
 
 
-def draw_grid_overlay(frame: np.ndarray, step_px: int = 100) -> np.ndarray:
+def draw_grid_overlay(frame: np.ndarray, step_px: int = 100, cam_idx: int = -1) -> np.ndarray:
     annotated = frame.copy()
     h, w = annotated.shape[:2]
     for x in range(0, w, step_px):
@@ -233,6 +270,28 @@ def draw_grid_overlay(frame: np.ndarray, step_px: int = 100) -> np.ndarray:
                 (0, 255, 255),
                 2,
             )
+    if cam_idx == 2:
+        # Fixed-jaw flat grey rubber pad target zone (x=868..955, y=730..830) and rear V-gap limit (y=835)
+        cv2.rectangle(annotated, (868, 730), (955, 830), (0, 255, 0), 2)
+        cv2.putText(
+            annotated,
+            "FLAT PAD ZONE (x=868..955, y=730..830)",
+            (865, 720),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.50,
+            (0, 255, 0),
+            2,
+        )
+        cv2.line(annotated, (820, 835), (980, 835), (0, 0, 255), 2)
+        cv2.putText(
+            annotated,
+            "V-GAP LIMIT (y=835)",
+            (985, 840),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.50,
+            (0, 0, 255),
+            2,
+        )
     return annotated
 
 
@@ -249,7 +308,7 @@ def capture_cameras(out_prefix: str, out_dir: Path) -> list[str]:
             raw_path = out_dir / f"{out_prefix}_cam_{cam_idx}.png"
             grid_path = out_dir / f"{out_prefix}_cam_{cam_idx}_grid.png"
             cv2.imwrite(str(raw_path), frame)
-            cv2.imwrite(str(grid_path), draw_grid_overlay(frame))
+            cv2.imwrite(str(grid_path), draw_grid_overlay(frame, cam_idx=cam_idx))
             saved.append(str(raw_path))
             saved.append(str(grid_path))
     return saved
@@ -267,14 +326,14 @@ def report_status(
     g_pos = ticks[5]
     g_load = read_u16(ser, 6, 60)
 
-    if 2075 <= g_pos <= 2135:
-        grasp_state = "MARKER_CLAMPED"
-    elif g_pos <= 2045:
+    if 2060 <= g_pos <= 2650:
+        grasp_state = "MARKER_HELD"
+    elif g_pos <= 2055:
         grasp_state = "EMPTY_CLOSED"
-    elif g_pos >= 2500:
+    elif g_pos >= 2700:
         grasp_state = "OPEN"
     else:
-        grasp_state = "PARTIAL"
+        grasp_state = "PARTIAL_OR_TRANSITION"
 
     info: dict[str, object] = {
         "ticks": ticks,
@@ -408,8 +467,36 @@ def main() -> None:
                 g_tick = int(arg)
             prefix = sys.argv[3] if len(sys.argv) >= 4 else f"gripper_{arg}"
             cur_ticks = read_all_ticks(ser)
-            cur_ticks[5] = g_tick
-            smooth_move_ticks(ser, cur_ticks, steps=25, dt=0.025)
+            if g_tick >= 2500 and cur_ticks[5] < 2500:
+                cur_q = ticks_to_rad(cur_ticks)
+                pos, pitch_rad = compute_fk(solver, cur_q)
+                r_cur = float(np.hypot(pos[0], pos[1]))
+                if r_cur > 0.210 and float(pos[2]) < 0.075:
+                    # Safe retract by 2.5 cm with jaws closed before opening so we never knock the marker
+                    retract_ticks = solve_polar_ticks(
+                        solver,
+                        int(cur_ticks[0]),
+                        max(0.190, r_cur - 0.025),
+                        float(pos[2]),
+                        float(np.clip(pitch_rad, 0.85, 1.05)),
+                    )
+                    retract_ticks.append(int(cur_ticks[5]))
+                    smooth_move_ticks(ser, retract_ticks, steps=25, dt=0.025)
+                    cur_ticks = read_all_ticks(ser)
+            # Actuate ONLY Motor 6 so Motors 1..5 keep their gravity-trimmed Goal_Position (Reg 42)
+            write_u8(ser, 6, 55, 0)
+            write_u8(ser, 6, 34, 75)
+            write_u8(ser, 6, 36, 75)
+            write_u8(ser, 6, 55, 1)
+            write_u16(ser, 6, 48, 750)
+            write_u8(ser, 6, 40, 1)
+            start_g = int(cur_ticks[5])
+            for s in range(1, 26):
+                alpha = s / 25.0
+                w = 0.5 * (1.0 - np.cos(np.pi * alpha))
+                g_interp = int(round((1.0 - w) * start_g + w * g_tick))
+                write_u16(ser, 6, 42, g_interp)
+                time.sleep(0.025)
             time.sleep(0.35)
             report_status(ser, solver, prefix, default_out)
 
@@ -502,8 +589,8 @@ def main() -> None:
                 t_end_up.append(1700)
                 smooth_move_ticks(ser, t_end_up, steps=15, dt=0.020)
 
-            # 5. Retract to right-side unobstructed pose so Camera 0 sees the full sheet
-            unobstructed_ticks = [2480, 1150, 2950, 1950, 973, 1700]
+            # 5. Retract to straight-ahead high unobstructed pose so Camera 0 sees the full sheet
+            unobstructed_ticks = [1950, 1250, 2980, 2100, 973, 1700]
             smooth_move_ticks(ser, unobstructed_ticks, steps=40, dt=0.025)
             report_status(ser, solver, prefix, default_out)
 
