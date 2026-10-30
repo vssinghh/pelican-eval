@@ -36,23 +36,25 @@ Why `move-polar` with `pitch_rad = 0.95`:
 
 ***
 
-## 2. Five Physical Rules for 100% Repeatable Grasping
+## 2. Six Physical Rules for 100% Repeatable Grasping
 
-Before moving the arm, internalize these five physical invariants of the SO-ARM101 gripper and camera geometry. View the linked reference images in `references/` to verify what each state looks like.
+Before moving the arm, internalize these six physical invariants of the SO-ARM101 gripper and camera geometry. View the linked reference images in `references/` to verify what each state looks like.
 
-### Rule 1: The Grasp-Height Rule (Grasp `1 to 2 cm` Below the Top Cap at `z_m = 0.048 to 0.053 m`)
-* **Never approach near the bottom of the marker (`z_m < 0.035 m`).** When the jaws are low near the holder, the upper `8 cm` of the marker sticks up right in front of the `Camera 2` lens, creating a giant out-of-focus black shadow that hides the jaws (see [bad_too_low_occlusion_cam2.png](references/bad_too_low_occlusion_cam2.png)).
-* **Always set the final grasp height `z_m` (`0.048 to 0.053 m`) so the jaw tips sit `1 to 2 cm` below the top cap of the marker in `Camera 1`** (see [good_top_height_cam1.png](references/good_top_height_cam1.png)). At this height:
-  1. Nothing extends above the jaws to block `Camera 2` or create severe vertical parallax.
-  2. The circular top cap of the marker in `Camera 2` is at the exact height of the flat grey rubber pads.
-  3. The jaws stay `4+ cm` above the figurine or cup holder, preventing collisions with the holder.
+### Rule 1: The Lower-Barrel Grasp Height and Leaning-Cup Compensation Rule (`z_m = 0.020 to 0.038 m`)
+* **Target the lower white barrel (`2.0 to 3.5 cm` below the top cap, `0.8 to 1.5 cm` above the holder rim) rather than grasping high near the cap.** Grasping lower on the main cylindrical body gives the flat rubber pads maximum contact area, prevents the marker from pivoting near its top cap, and keeps the lower tip shorter below the jaws for stable drawing calibration.
+* **Compensate for marker tilt in cup compartments when lowering `z_m`:** Inside a wide hexagonal cup cell, a marker leans at an angle (`~60 to 75 deg`). Because the barrel slopes diagonally from the cup rim up to the top cap, lowering `z_m` by `-6 mm` to grasp lower on the barrel requires two coordinated adjustments:
+  1. **Increase `reach_m` by `+5 to +7 mm`**: Lowering `z_m` by `-6 mm` shifts the barrel UP (`-42 px` in `-y_cam2`) in the diagonally downward-looking `Camera 2` frame, AND the sloping barrel is physically further forward near the cup rim. Advancing `reach_m` by `+5 to +7 mm` (`+40 to +55 px` in `+y_cam2`) keeps the lower barrel section centered inside the `FLAT PAD ZONE (y_cam2 = 700..825)`.
+  2. **Adjust `pan_tick` (`+10 to +20 ticks` if leaning right)** so the lower barrel cross-section at jaw height (not the upper red cap) aligns with the fixed left jaw pad (`x_cam2 = 868`).
+* **Never confuse the open moving right jaw tip in `Camera 1` for the marker top cap.** When the gripper is open (`2500` to `3145`), the background moving right jaw projects `~80 px` higher (`y_cam1 ≈ 225..260`) than the foreground fixed left jaw (`y_cam1 ≈ 340..400`). Always measure jaw height using the **foreground fixed left jaw** (`y_cam1 ≈ 370..405` at `z_m = 0.020..0.026 m`) and verify that the red cap and upper white collar extend clearly `70 to 110 px` (`2.0 to 3.5 cm`) above the foreground fixed left jaw while the jaws stay `8 to 15 mm` above the cup rim (see [good_top_height_cam1.png](references/good_top_height_cam1.png)).
 
-### Rule 2: The Single-Acting Jaw Rule (Keep `x_cam2` in `868..955` to Clear the Left Fixed Jaw)
-* In `Camera 2`, the **left jaw is fixed** (`x_cam2 = 800..868`) and the **right jaw is the pivoting finger** that swings open to the right (`x_cam2 > 955`). When the gripper is wide open (`3145`), the moving jaw swings out of view to the bottom-right, leaving only the fixed jaw visible on the left.
-* **Never align the marker directly in front of the black plastic tip of the fixed jaw (`x_cam2 < 868`).** If you advance or descend with the marker at `x_cam2 < 868`, the fixed jaw will hit the marker and push it aside (see [bad_fixed_jaw_hit_cam2.png](references/bad_fixed_jaw_hit_cam2.png)).
-* **Always adjust `pan_tick` so the circular top cap of the marker sits at `x_cam2 = 885..935` inside the green `FLAT PAD ZONE (x=868..955, y=730..830)` box** drawn on every `*_cam_2_grid.png` image (see [good_sight_alignment_cam2.png](references/good_sight_alignment_cam2.png)).
-  * If `x_cam2 < 880` (too close to the left fixed jaw), **decrease `pan_tick`** (`-10 ticks` shifts the marker `+36 px` right).
-  * If `x_cam2 > 945` (too far right), **increase `pan_tick`** (`+10 ticks` shifts the marker `-36 px` left).
+### Rule 2: The Single-Acting Jaw and Open-Throat Standoff Rule (`x_cam2 = 900..1020` Before Advancing)
+* In `Camera 2`, the **left jaw is fixed** (`x_cam2 = 750..868`, tip extending forward to `y_cam2 = 565`) and the **right jaw is the pivoting finger** that swings open to the right (`x_cam2 > 955`). When the gripper is wide open (`3145`), the moving jaw swings out of view to the bottom-right, leaving only the fixed jaw visible on the left.
+* **Never advance `reach_m` while the marker is in front of or grazing the fixed left jaw tip (`x_cam2 < 885` at `y_cam2 < 565`).** Even at `x_cam2 = 850..875`, advancing `reach_m` causes the rounded front tip of the fixed left jaw (`x_cam2 = 750..868`) to collide head-on with the marker barrel and push it forward/down underneath the jaw (see [bad_fixed_jaw_hit_cam2.png](references/bad_fixed_jaw_hit_cam2.png)).
+* **Two-stage azimuth alignment in `Camera 2`:**
+  1. **At pre-enclosure standoff (`y_cam2 < 565`)**: Adjust `pan_tick` so the marker barrel/cap sits well inside the **wide-open throat to the right of the fixed jaw tip (`x_cam2 = 900..1020`)** before advancing `reach_m`.
+  2. **At enclosure reach (`y_cam2 = 730..830`)**: Advance `reach_m` (optionally with `+10..+15 ticks` of `pan_tick`) so the marker lands squarely inside the green `FLAT PAD ZONE (x=868..955, y=730..830)` box drawn on every `*_cam_2_grid.png` image (see [good_sight_alignment_cam2.png](references/good_sight_alignment_cam2.png)).
+  * If `x_cam2 < 885` (too close to the left fixed jaw), **decrease `pan_tick`** (`-10 ticks` shifts the marker `+18..+36 px` right depending on reach).
+  * If `x_cam2 > 965` once at enclosure depth (`y_cam2 = 730..830`), **increase `pan_tick`** (`+10 ticks` shifts the marker `-18..-36 px` left against the flat rubber pad).
 
 ### Rule 3: The Flat Pad Zone vs. Rear V-Gap Rule (`y_cam2 = 730..830`, Never `> 835`)
 * The gripping surface of the SO-ARM101 jaw is the **flat grey high-friction rubber pad** (`y_cam2 = 730..830` in `Camera 2`, marked by the green `FLAT PAD ZONE` box). Immediately behind the flat rubber pads (`y_cam2 > 835`, marked by the red `V-GAP LIMIT` line) is a wider V-shaped cutout near the jaw pivot.
@@ -65,11 +67,20 @@ Before moving the arm, internalize these five physical invariants of the SO-ARM1
   1. In `Camera 2`, the marker top cap should appear lower in the frame (`y_cam2 = 880..910`) so that descending `-30 mm` to `z_m = 0.050 to 0.053 m` shifts it up by `-210 px` directly into `y_cam2 = 730..830` (`FLAT PAD ZONE`).
   2. Always cross-check `Camera 1` (`side_cam`) before descending: verify that the flat grey rubber pads on the upper jaw sit directly above the vertical marker barrel (or approach from `1.5 to 2.5 cm` short of the barrel at `z_m = 0.050 m` and then advance `reach_m` horizontally into the `FLAT PAD ZONE`).
 
-### Rule 5: The Closed-Jaw Self-Correction Rule (Inspect Before Opening on a Miss)
+### Rule 5: The Slow 3-Stage Closure and Fixed-Jaw Pad Pre-Contact Rule (`2500 -> 2310 -> 2150 -> 1700`)
+* **Never snap the gripper directly from open (`3145` or `2500`) to `clamp` (`1700`) in a single step on a leaning marker inside a cup cell.** When a marker rests freely in a wide cup compartment, a single fast sweep of the pivoting right jaw can push or roll the barrel sideways or into the unpadded rear V-gap before the rubber pads engage.
+* **Always align the marker's left edge flush against the fixed left jaw's grey rubber pad (`x_cam2 = 868`, `y_cam2 = 700..825`) with the gripper at `2500` before closing** (see [good_stage0_flush_left_pad_cam2.png](references/good_stage0_flush_left_pad_cam2.png)). When the marker barrel is already supported on the left by the stationary rubber pad, the closing right jaw pushes the barrel directly against a high-friction backstop instead of knocking it sideways.
+* **Execute closure slowly (`2.0 s` ramp in `so101_cli.py`) across three verified stages:**
+  1. **Stage 1 (`gripper 2310`)**: Pre-close the moving right jaw to `x_cam2 ≈ 1230` (`2 to 4 mm` from the right side of the barrel) and verify in `Camera 2` that the marker remains undisturbed inside `y_cam2 = 700..825` (see [good_stage1_soft_close_2310_cam2.png](references/good_stage1_soft_close_2310_cam2.png)).
+  2. **Stage 2 (`gripper 2150`)**: Soft-contact close until the moving right jaw's rubber pad gently touches the right side of the barrel (`Reg 56 ≈ 2165..2200`, `Reg 60 ≈ 80..120`), capturing the barrel between both pads with zero impact deflection (see [good_stage2_touch_close_2150_cam2.png](references/good_stage2_touch_close_2150_cam2.png)).
+  3. **Stage 3 (`gripper clamp` / `1700`)**: Apply full holding preload and verify `2060 <= Reg 56 <= 2350` and `Reg 60 >= 150` (`BARREL_HELD_IN_FLAT_PAD`, see [good_stage3_clamp_1700_cam2.png](references/good_stage3_clamp_1700_cam2.png)).
+
+### Rule 6: The Closed-Jaw Self-Correction Rule (Inspect Before Opening on a Miss)
 * After clamping (`gripper clamp` or `move-polar ... 1700`), verify both servo registers in the JSON output:
-  * **`2075 <= Reg 56 <= 2150` and `Reg 60 >= 200` (`grasp_state == "MARKER_HELD"`):** The `10 mm` marker barrel is firmly clamped between the flat grey rubber pads.
-  * **`Reg 56 <= 2055` (`grasp_state == "EMPTY_CLOSED"`):** The jaws closed empty (or deep in the V-gap if `Reg 56` is `2048..2058`).
-* **If a miss occurs, DO NOT open the gripper in place near the marker.** Note that `so101_cli.py gripper open` automatically retracts `reach_m` by `-2.5 cm` with the jaws closed before opening whenever `reach_m > 0.210 m` and `z_m < 0.075 m`, preventing the pivoting right jaw from knocking the marker over.
+  * **`2060 <= Reg 56 <= 2650` and `Reg 60 >= 150` (`grasp_state == "BARREL_HELD_IN_FLAT_PAD"`):** The marker barrel (`8 mm` to `16 mm` diameter) is firmly clamped between the flat grey rubber pads (typically `Reg 56 = 2085..2110` for `10 mm` barrels or `2130..2350` for thicker `12 to 15 mm` barrels, with `Reg 60 = 200..450`).
+  * **`1960 <= Reg 56 <= 2059` (`grasp_state == "BARREL_IN_REAR_V_GAP"` or `"PUSHED_INTO_INNER_V_GAP"`):** The marker slipped past `y_cam2 = 835` into the rear V-gap cutout.
+  * **`Reg 56 <= 2055` and low load (`grasp_state == "EMPTY_CLOSED"`):** The jaws closed empty.
+* **If a miss occurs, DO NOT open the gripper wide (`3145`) in place near the marker.** Open only to `2500` after retracting `reach_m` by `-20 to -25 mm` so the pivoting right jaw never sweeps into the marker or cup walls.
 
 ***
 
@@ -81,49 +92,54 @@ Run `status` to auto-discover the follower serial port, read current joint ticks
 uv run python scripts/so101_cli.py status step1_observe
 ```
 * If `status` reports `"FOLLOWER_USB_NOT_FOUND"` or `"SERVOS_NOT_RESPONDING"`, stop and ask the user to check the follower USB-C cable and 12V power supply.
-* Inspect `outputs/live/step1_observe_cam_0_grid.png` and `outputs/live/step1_observe_cam_1_grid.png` to confirm the marker is upright in the holder and estimate its coarse azimuth (`pan_tick`, typically `2400 to 2530` when the holder is on the right side of the paper) and radial distance (`reach_m`, typically `0.180 to 0.205 m`).
+* Inspect `outputs/live/step1_observe_cam_0_grid.png` and `outputs/live/step1_observe_cam_1_grid.png` to confirm the marker is in the holder, identify which cup compartment holds it, and estimate its coarse azimuth (`pan_tick`, typically `2400 to 2530`) and radial distance (`reach_m`, typically `0.185 to 0.215 m`).
 
-### Step 2: Move to Pre-Approach Pose and Align Azimuth (`pan_tick`)
-Move to a pre-approach pose (`2 cm` short of the marker radially at `z_m = 0.050 m`, or hovering above at `z_m = 0.080 m`, with `pitch_rad = 0.95` and gripper closed `2035` for sighting or open `3145`):
+### Step 2: Move to Pre-Approach Standoff and Align Azimuth (`pan_tick`)
+Move to a pre-approach standoff (`2.0 to 2.5 cm` short of the marker radially at lower-barrel height `z_m = 0.022 to 0.026 m` for cup holders or `0.036 to 0.045 m` for tall figurines, with `pitch_rad = 0.92..0.95` and gripper pre-narrowed to `2500`):
 ```bash
-uv run python scripts/so101_cli.py move-polar <pan_tick> 0.180 0.050 0.95 3145 step2_align
+uv run python scripts/so101_cli.py move-polar <pan_tick> 0.185 0.024 0.92 2500 step2_align
 ```
-*(Note: `so101_cli.py` automatically routes large `Motor 1` pans through a high-clearance overhead arc at `z >= 0.115 m` so the arm never sweeps low across the figurine or paper.)*
+*(Note: `so101_cli.py` automatically routes large `Motor 1` pans through a high-clearance overhead arc at `z >= 0.115 m` so the arm never sweeps low across the holder or paper.)*
 
 Inspect `outputs/live/step2_align_cam_1_grid.png` and `outputs/live/step2_align_cam_2_grid.png`:
-1. In `Camera 1`, verify the jaw tips are `1 to 2 cm` below the top cap of the marker (`z_m = 0.048 to 0.053 m`, compare with [good_top_height_cam1.png](references/good_top_height_cam1.png)).
-2. In `Camera 2`, check the horizontal `x_cam2` position of the circular marker top cap relative to the green `FLAT PAD ZONE (x=868..955, y=730..830)` box:
-   * Target `x_cam2 = 885..935` (centered in the open gap to the right of the fixed jaw wall).
+1. In `Camera 1`, verify the foreground fixed left jaw sits at the **lower white barrel** (`2.0 to 3.5 cm` below the top cap, `8 to 15 mm` above the cup rim).
+2. In `Camera 2`, check the horizontal `x_cam2` position of the lower barrel section at jaw height (`y_cam2 = 500..650` at standoff):
+   * Target `x_cam2 = 885..950` for the barrel's left edge so it clears the fixed left jaw tip (`x_cam2 = 868`, `y_cam2 = 565`) during radial advance.
    * If `x_cam2 < 880` (marker too far left in `Camera 2`), **decrease `pan_tick`** (`-10 ticks` shifts the marker `+36 px` right).
-   * If `x_cam2 > 940` (marker too far right in `Camera 2`), **increase `pan_tick`** (`+10 ticks` shifts the marker `-36 px` left).
+   * If `x_cam2 > 960` (marker too far right in `Camera 2`), **increase `pan_tick`** (`+10 ticks` shifts the marker `-36 px` left).
 
-### Step 3: Advance Radially into the `FLAT PAD ZONE (x=868..955, y=730..830)`
-With `pan_tick` locked and gripper open (`3145`), advance `reach_m` so the marker barrel enters the green `FLAT PAD ZONE` between the flat grey rubber pads:
+### Step 3: Advance Radially into the `FLAT PAD ZONE` and Seat Flush Against the Fixed Left Pad
+Advance `reach_m` at lower-barrel height (`z_m = 0.020 to 0.025 m`) so the lower white barrel enters `y_cam2 = 700..825` (remembering that lower `z_m` on a leaning marker requires `+5 to +8 mm` more `reach_m` than grasping near the cap), then fine-tune `pan_tick` so the left edge of the barrel sits **flush against the fixed left jaw's grey rubber pad (`x_cam2 = 868`)**:
 ```bash
-uv run python scripts/so101_cli.py move-polar <pan_tick> <grasp_reach_m> 0.050 0.95 3145 step3_enclose
+uv run python scripts/so101_cli.py move-polar <pan_tick> <grasp_reach_m> 0.022 0.92 2500 step3_enclose
 ```
 Inspect `outputs/live/step3_enclose_cam_2_grid.png` and `outputs/live/step3_enclose_cam_1_grid.png`:
-* Confirm in `Camera 2` that the marker barrel/cap sits squarely inside the green `FLAT PAD ZONE (x=868..955, y=730..830)` box and **above** the red `V-GAP LIMIT (y=835)` line. (Use `+1 mm reach_m = +7.9 px y_cam2` to fine-tune `reach_m` if needed.)
-* Confirm in `Camera 1` that the flat grey rubber pads overlap the upper marker barrel `1 to 2 cm` below the top cap.
+* Confirm in `Camera 2` that the lower marker barrel cross-section at the jaw plane sits squarely inside `y_cam2 = 700..825` (**above** the red `V-GAP LIMIT (y=835)` line) and its left edge touches the fixed left jaw pad (`x_cam2 = 868`).
+* **3D Perspective Note for Lower-Barrel Grasps (`Camera 2` vs `Camera 1`)**: When grasping `2.0 to 3.5 cm` below the top cap (`z_m = 0.013 to 0.025 m`), the top cap of the marker extends **above** the top surface of the gripper jaws (`y_cam1 < y_jaws` in `Camera 1`). Because `Camera 2` is mounted on the wrist above the jaws looking downward at an angle, the top cap protruding above the jaws is closer to the `Camera 2` lens and projects across the bottom of the `Camera 2` frame (`y_cam2 = 850..1080`). Do not mistake that upper cap projection for the jaw-plane cross-section: always verify jaw height in `Camera 1` (`y_cam1` below the cap) and check the barrel's alignment between the two grey rubber pads specifically along rows `y_cam2 = 730..830` in `Camera 2`.
+* Confirm in `Camera 1` that the foreground fixed left jaw overlaps the lower white barrel (`2.0 to 3.5 cm` below the cap) with `8 to 15 mm` clearance above the cup rim.
 
-### Step 4: Clamp Between the Flat Rubber Pads and Verify `Reg 56` + `Reg 60`
-Command the firm grasp (`1700`) via `gripper clamp` (which actuates only `Motor 6` while preserving the trimmed pose of `Motors 1..5`) or `move-polar`:
+### Step 4: Execute 3-Stage Slow Closure (`2310 -> 2150 -> 1700`) and Verify `Reg 56` + `Reg 60`
+Close the gripper slowly in three stages using `gripper` (which ramps over `2.0 s` and actuates only `Motor 6` while preserving the trimmed pose of `Motors 1..5`):
 ```bash
-uv run python scripts/so101_cli.py gripper clamp step4_clamp
+uv run python scripts/so101_cli.py gripper 2310 step4a_soft_close
+uv run python scripts/so101_cli.py gripper 2150 step4b_touch_close
+uv run python scripts/so101_cli.py gripper clamp step4c_clamp
 ```
-Inspect `outputs/live/step4_clamp_cam_2_grid.png` and the JSON telemetry:
-* **Success criteria:**
-  * `2075 <= gripper_present_position_reg56 <= 2150` (`grasp_state == "MARKER_HELD"`)
-  * `gripper_present_load_reg60 >= 200`
-  * In `Camera 2`, both left and right flat grey rubber pads are visibly pressed against the marker barrel inside the green `FLAT PAD ZONE (x=868..955, y=730..830)`.
-* **If `Reg 56 <= 2058`:** The marker is either missed (`EMPTY_CLOSED`) or too deep in the rear V-gap (`y_cam2 > 835`). Retract `reach_m` with the gripper closed, open at a safe retracted reach, adjust `reach_m` or `pan_tick`, and repeat Step 3.
+Inspect `step4a_soft_close_cam_2_grid.png`, `step4b_touch_close_cam_2_grid.png`, and `step4c_clamp_cam_2_grid.png` along with the JSON telemetry:
+* **After Stage 1 (`2310`)**: Confirm the moving right jaw pad has approached to `x_cam2 ≈ 1230` without shifting the marker.
+* **After Stage 2 (`2150`)**: Confirm the moving right jaw pad gently touches the right side of the barrel (`Reg 56 ≈ 2165..2200`, `Reg 60 ≈ 80..120`) while the left side remains flush against `x_cam2 = 868`.
+* **After Stage 3 (`clamp` / `1700`)**:
+  * `2060 <= gripper_present_position_reg56 <= 2350` (`grasp_state == "BARREL_HELD_IN_FLAT_PAD"`)
+  * `gripper_present_load_reg60 >= 150` (typically `200..450`)
+  * In `Camera 2`, both left and right flat grey rubber pads are visibly pressed against the lower white barrel inside `y_cam2 = 700..825`.
+* **If `Reg 56 <= 2059`:** The marker slipped into the rear V-gap (`y_cam2 > 835`) or was missed. Retract `reach_m` by `-20 mm` before opening to `2500`, reduce `reach_m` by `4 to 6 mm` at enclosure so `y_cam2 <= 820`, and repeat Step 3.
 
 ### Step 5: Lift Vertically Clear of the Holder
-Once `Reg 56` (`2075..2150`), `Reg 60` (`>= 200`), and `Camera 2` confirm a flat-pad grasp, extract the marker straight up by raising `z_m` to `0.125 to 0.135 m` while keeping `pan_tick` locked and the gripper clamped (`1700`):
+Once `Reg 56` (`2060..2650`), `Reg 60` (`>= 150`), and `Camera 2` confirm a flat-pad grasp, extract the marker straight up by raising `z_m` to `0.125 to 0.135 m` while keeping `pan_tick` locked and the gripper clamped (`1700`):
 ```bash
 uv run python scripts/so101_cli.py move-polar <pan_tick> <grasp_reach_m> 0.130 0.85 1700 step5_lift
 ```
-Inspect `outputs/live/step5_lift_cam_0_grid.png`, `outputs/live/step5_lift_cam_1_grid.png`, and `outputs/live/step5_lift_cam_2_grid.png` to confirm the bottom tip of the marker is completely clear of the figurine holder in mid-air and `gripper_present_position_reg56` remains in `[2075, 2150]`.
+Inspect `outputs/live/step5_lift_cam_0_grid.png`, `outputs/live/step5_lift_cam_1_grid.png`, and `outputs/live/step5_lift_cam_2_grid.png` to confirm the bottom tip of the marker is completely clear of the figurine holder in mid-air and `gripper_present_position_reg56` remains in `[2060, 2650]`.
 
 ***
 

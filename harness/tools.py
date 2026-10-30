@@ -5,13 +5,22 @@ from __future__ import annotations
 import base64
 import io
 import json
+import subprocess
+import sys
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 from PIL import Image
 
-from envs.base import AVAILABLE_MARKER_COLORS, WORKSPACE_SPEC, SO101WhiteboardEnv
+from envs.base import (
+    AVAILABLE_MARKER_COLORS,
+    MARKER_COLORS_RGB,
+    WORKSPACE_SPEC,
+    SO101WhiteboardEnv,
+)
 from envs.trajectory import compile_primitives_to_waypoints
 from harness.python_sandbox import RestrictedPythonSandbox
 
@@ -105,7 +114,7 @@ OPENAI_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": "List of [X, Y, Z] coordinates in meters.",
                         "items": {
                             "type": "array",
-                            "items": {"type": "number"},
+                            "items": {"number": "float"} if False else {"type": "number"},
                         },
                     },
                     "color": {
@@ -157,6 +166,120 @@ OPENAI_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
+REAL_SKILL_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "so101_cli",
+            "description": (
+                "Execute a physical SO-ARM101 closed-loop CLI command from scripts/so101_cli.py "
+                "(as taught in the so101-pickup-marker and so101-calibrate-paper-contact skills) "
+                "and return joint ticks, FK pinch_site_xyz_m, Reg 56 position, Reg 60 load, grasp_state, "
+                "and the 3 live annotated camera images (Camera 0 overhead, Camera 1 side, Camera 2 wrist). "
+                "Supported commands in args: "
+                "['status', '<prefix>'], "
+                "['open-observe', '<prefix>'], "
+                "['move-polar', '<pan_tick>', '<reach_m>', '<z_m>', '<pitch_rad>', '<gripper_tick>', '<prefix>'], "
+                "['nudge-polar', '<d_pan_tick>', '<d_reach_m>', '<d_z_m>', '<d_pitch_rad>', '<prefix>'], "
+                "['move-ik', '<x>', '<y>', '<z>', '<pitch_rad>', '<gripper_tick>', '<prefix>'], "
+                "['gripper', '<open|clamp|tick>', '<prefix>'], "
+                "['lift', '<dz_m>', '<prefix>'], "
+                "['place', '<pan_tick>', '<reach_m>', '<z_insert_m>', '<prefix>'], "
+                "['draw-strokes', '<json_strokes_string>', '<prefix>'], "
+                "['safe-park', '<release|keep>', '<prefix>']."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Command-line arguments to pass to scripts/so101_cli.py, e.g. "
+                            "['move-polar', '2420', '0.202', '0.018', '0.95', '2500', 'step2_align'] or "
+                            "['draw-strokes', '[{\"points\": [[0.25, 0.30], [0.75, 0.30]]}]', 'pelican_strokes']."
+                        ),
+                    }
+                },
+                "required": ["args"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_calibration",
+            "description": (
+                "Save calibrated paper contact plane parameters to config/calibration.json after running "
+                "the so101-calibrate-paper-contact skill."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plane_coeffs_abc": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Linear plane coefficients [a, b, c] for z_board(x, y) = a*x + b*y + c.",
+                    },
+                    "draw_z_pen_down": {
+                        "type": "number",
+                        "description": "Minimum pen-down Z height in meters (e.g. z_far - 0.0005).",
+                    },
+                    "draw_z_pen_up": {
+                        "type": "number",
+                        "description": "Safe pen-up hover Z height in meters (e.g. 0.088).",
+                    },
+                    "target_pitch": {
+                        "type": "number",
+                        "description": "Calibrated vertical wrist pitch in radians (e.g. 1.65).",
+                    },
+                    "board_x_range": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Optional [x_min, x_max] paper range in meters.",
+                    },
+                    "board_y_range": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Optional [y_min, y_max] paper range in meters.",
+                    },
+                },
+                "required": ["plane_coeffs_abc"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_marker_swap",
+            "description": (
+                "Release/drop the currently held marker via 'safe-park release', pause the benchmark timer, "
+                "and ask the human operator to place the requested marker color ('black', 'blue', or 'red', "
+                "uncapped, tip down) into the front low bin. After this returns, use the so101-pickup-marker "
+                "and so101-calibrate-paper-contact skills to pick up and calibrate the new marker."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "color": {
+                        "type": "string",
+                        "enum": list(AVAILABLE_MARKER_COLORS),
+                        "description": "Marker color to ask the human operator to place in the bin: 'black', 'blue', or 'red'.",
+                    }
+                },
+                "required": ["color"],
+            },
+        },
+    },
+]
+
+
+def get_tool_schemas(domain: str = "sim") -> list[dict[str, Any]]:
+    """Return tool schemas for the given execution domain ('sim' or 'real')."""
+    if domain == "real":
+        return OPENAI_TOOL_SCHEMAS + REAL_SKILL_TOOL_SCHEMAS
+    return OPENAI_TOOL_SCHEMAS
+
 
 @dataclass
 class ToolExecutionResult:
@@ -180,6 +303,19 @@ def encode_rgb_to_base64_png(rgb_array: np.ndarray, max_width: int = 800) -> str
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def encode_image_path_to_base64_png(img_path: Path, max_width: int = 800) -> str:
+    """Load an image file from disk and encode it as a resized base64 PNG string."""
+    with Image.open(img_path) as img:
+        rgb_img = img.convert("RGB")
+        if rgb_img.width > max_width:
+            ratio = float(max_width) / float(rgb_img.width)
+            new_h = max(1, round(rgb_img.height * ratio))
+            rgb_img = rgb_img.resize((max_width, new_h), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        rgb_img.save(buf, format="PNG", optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 class WhiteboardToolBelt:
     """Stateful tool dispatcher that binds an SO101WhiteboardEnv to the agent tools."""
 
@@ -194,6 +330,7 @@ class WhiteboardToolBelt:
         self.spatial_hallucinations: int = 0
         self.code_hallucinations: int = 0
         self.total_tool_calls: int = 0
+        self.paused_human_time_s: float = 0.0
         self.tool_call_counts: dict[str, int] = {
             "get_workspace_detail": 0,
             "select_marker": 0,
@@ -205,6 +342,121 @@ class WhiteboardToolBelt:
         self.hallucination_log: list[str] = []
         self.finished: bool = False
         self.finish_summary: str = ""
+
+    def _run_so101_cli_subprocess(self, cli_args: list[str]) -> tuple[dict[str, Any], list[str]]:
+        """Execute scripts/so101_cli.py with cli_args and return (json_payload, base64_grid_images)."""
+        repo_root = Path(__file__).resolve().parent.parent
+        script_path = repo_root / "scripts" / "so101_cli.py"
+
+        if getattr(self.env, "mock_hardware", False):
+            obs = self.env.get_obs()
+            b64_0 = encode_rgb_to_base64_png(obs["rgb_overhead_cam"], max_width=640)
+            b64_1 = encode_rgb_to_base64_png(obs["rgb_third_person_cam"], max_width=640)
+            mock_payload: dict[str, Any] = {
+                "status": "ok",
+                "mock_hardware": True,
+                "command_args": cli_args,
+                "ticks": [2048, 1600, 2250, 2850, 973, 2125],
+                "pinch_site_xyz_m": [0.206, -0.025, 0.088],
+                "gripper_present_position_reg56": 2125,
+                "gripper_present_load_reg60": 380,
+                "grasp_state": "BARREL_HELD_IN_FLAT_PAD",
+            }
+            if cli_args and cli_args[0] == "draw-strokes" and len(cli_args) >= 2:
+                self._mirror_normalized_strokes_to_canvas(cli_args[1])
+            return mock_payload, [b64_0, b64_1]
+
+        if hasattr(self.env, "suspend_connections"):
+            self.env.suspend_connections()
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(script_path), *[str(a) for a in cli_args]],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        finally:
+            if hasattr(self.env, "resume_connections"):
+                self.env.resume_connections()
+
+        stdout_str = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            err_detail = (proc.stderr or stdout_str or f"exit code {proc.returncode}").strip()
+            raise RuntimeError(f"so101_cli failed: {err_detail}")
+
+        json_start = stdout_str.find("{")
+        json_end = stdout_str.rfind("}")
+        if json_start < 0 or json_end < json_start:
+            raise RuntimeError(f"so101_cli returned non-JSON output: {stdout_str}")
+
+        payload: dict[str, Any] = json.loads(stdout_str[json_start : json_end + 1])
+
+        if cli_args and cli_args[0] == "draw-strokes" and len(cli_args) >= 2:
+            self._mirror_normalized_strokes_to_canvas(cli_args[1])
+
+        images_b64: list[str] = []
+        saved_paths = payload.get("saved_images", [])
+        grid_paths = [Path(p) for p in saved_paths if str(p).endswith("_grid.png") and Path(p).exists()]
+        raw_paths = [Path(p) for p in saved_paths if not str(p).endswith("_grid.png") and Path(p).exists()]
+
+        for gp in grid_paths:
+            images_b64.append(encode_image_path_to_base64_png(gp, max_width=800))
+
+        # Append a timelapse frame if raw cam_0 and cam_1 were saved
+        cam0_raw = next((p for p in raw_paths if p.name.endswith("_cam_0.png")), None)
+        cam1_raw = next((p for p in raw_paths if p.name.endswith("_cam_1.png")), None)
+        if cam0_raw is not None and cam1_raw is not None and hasattr(self.env, "timelapse_frames"):
+            try:
+                with Image.open(cam1_raw) as im1, Image.open(cam0_raw) as im0:
+                    tp = im1.convert("RGB").resize((400, 300))
+                    ov = im0.convert("RGB").resize((400, 300))
+                    combined = Image.new("RGB", (800, 300))
+                    combined.paste(tp, (0, 0))
+                    combined.paste(ov, (400, 0))
+                    self.env.timelapse_frames.append(np.asarray(combined, dtype=np.uint8))
+            except OSError:
+                pass
+
+        return payload, images_b64
+
+    def _mirror_normalized_strokes_to_canvas(self, raw_strokes_arg: str) -> None:
+        """Mirror normalized (u, v) strokes from draw-strokes onto env._canvas_draw for scoring."""
+        try:
+            if Path(raw_strokes_arg).is_file():
+                data = json.loads(Path(raw_strokes_arg).read_text(encoding="utf-8"))
+            else:
+                data = json.loads(raw_strokes_arg)
+        except Exception:  # noqa: BLE001
+            return
+
+        if not isinstance(data, list) or not hasattr(self.env, "_canvas_draw"):
+            return
+
+        color_name = getattr(self.env, "current_marker_color", "black")
+        rgb = MARKER_COLORS_RGB.get(color_name, (28, 32, 42))
+        w = int(getattr(self.env, "canvas_w", 1000))
+        h = int(getattr(self.env, "canvas_h", 500))
+
+        for stroke in data:
+            if not isinstance(stroke, dict):
+                continue
+            pts = stroke.get("points", [])
+            if not isinstance(pts, list) or len(pts) < 2:
+                continue
+            if hasattr(self.env, "colors_used"):
+                self.env.colors_used.add(color_name)
+            for idx in range(1, len(pts)):
+                u0, v0 = float(pts[idx - 1][0]), float(pts[idx - 1][1])
+                u1, v1 = float(pts[idx][0]), float(pts[idx][1])
+                c0 = int(np.clip(u0, 0.0, 1.0) * (w - 1))
+                r0 = int((1.0 - np.clip(v0, 0.0, 1.0)) * (h - 1))
+                c1 = int(np.clip(u1, 0.0, 1.0) * (w - 1))
+                r1 = int((1.0 - np.clip(v1, 0.0, 1.0)) * (h - 1))
+                self.env._canvas_draw.line([(c0, r0), (c1, r1)], fill=rgb, width=4)
+                if hasattr(self.env, "ink_pixels_drawn"):
+                    self.env.ink_pixels_drawn += max(1, int(np.hypot(r1 - r0, c1 - c0)))
 
     def _exec_draw_primitives_internal(
         self,
@@ -304,6 +556,123 @@ class WhiteboardToolBelt:
             return ToolExecutionResult(
                 tool_name=tool_name,
                 response_json=json.dumps({"status": "error", "error": msg}),
+            )
+
+        if tool_name == "so101_cli":
+            cli_args = args.get("args", [])
+            if not isinstance(cli_args, list) or len(cli_args) == 0:
+                self.code_hallucinations += 1
+                msg = "so101_cli requires a non-empty list 'args' of strings."
+                self.hallucination_log.append(msg)
+                return ToolExecutionResult(
+                    tool_name=tool_name,
+                    response_json=json.dumps({"status": "error", "error": msg}),
+                )
+            try:
+                payload, images_b64 = self._run_so101_cli_subprocess([str(a) for a in cli_args])
+            except Exception as exc:  # noqa: BLE001
+                self.code_hallucinations += 1
+                msg = f"so101_cli error: {exc}"
+                self.hallucination_log.append(msg)
+                return ToolExecutionResult(
+                    tool_name=tool_name,
+                    response_json=json.dumps({"status": "error", "error": msg}),
+                )
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                response_json=json.dumps({"status": "ok", **payload}),
+                images_base64_png=images_b64,
+            )
+
+        if tool_name == "update_calibration":
+            coeffs = args.get("plane_coeffs_abc")
+            if not isinstance(coeffs, list) or len(coeffs) != 3:
+                self.code_hallucinations += 1
+                msg = "update_calibration requires 'plane_coeffs_abc' as a list of 3 floats [a, b, c]."
+                self.hallucination_log.append(msg)
+                return ToolExecutionResult(
+                    tool_name=tool_name,
+                    response_json=json.dumps({"status": "error", "error": msg}),
+                )
+            cal_path = Path(__file__).resolve().parent.parent / "config" / "calibration.json"
+            try:
+                cal_data = json.loads(cal_path.read_text(encoding="utf-8")) if cal_path.exists() else {}
+                cal_data["plane_coeffs_abc"] = [float(coeffs[0]), float(coeffs[1]), float(coeffs[2])]
+                for opt_key in ("draw_z_pen_down", "draw_z_pen_up", "target_pitch"):
+                    if opt_key in args and args[opt_key] is not None:
+                        cal_data[opt_key] = float(args[opt_key])
+                for range_key in ("board_x_range", "board_y_range"):
+                    if range_key in args and isinstance(args[range_key], list) and len(args[range_key]) == 2:
+                        cal_data[range_key] = [float(args[range_key][0]), float(args[range_key][1])]
+                cal_path.write_text(json.dumps(cal_data, indent=2) + "\n", encoding="utf-8")
+                if hasattr(self.env, "reload_calibration"):
+                    self.env.reload_calibration()
+            except Exception as exc:  # noqa: BLE001
+                self.code_hallucinations += 1
+                msg = f"update_calibration error: {exc}"
+                self.hallucination_log.append(msg)
+                return ToolExecutionResult(
+                    tool_name=tool_name,
+                    response_json=json.dumps({"status": "error", "error": msg}),
+                )
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                response_json=json.dumps({"status": "ok", "updated_calibration": cal_data}),
+            )
+
+        if tool_name == "request_marker_swap":
+            target_color = str(args.get("color", "")).strip().lower()
+            if target_color not in AVAILABLE_MARKER_COLORS:
+                self.code_hallucinations += 1
+                msg = f"Invalid marker color '{target_color}'. Available colors: {list(AVAILABLE_MARKER_COLORS)}"
+                self.hallucination_log.append(msg)
+                return ToolExecutionResult(
+                    tool_name=tool_name,
+                    response_json=json.dumps({"status": "error", "error": msg}),
+                )
+            try:
+                self._run_so101_cli_subprocess(["safe-park", "release", f"swap_release_{target_color}"])
+                if not getattr(self.env, "mock_hardware", False):
+                    t_pause_start = time.perf_counter()
+                    print(
+                        f"\n[MARKER SWAP] Arm is parked and gripper is open. "
+                        f"Please place the '{target_color.upper()}' marker (uncapped, tip down) "
+                        f"into the front low bin and press Enter..."
+                    )
+                    try:
+                        input()
+                    except EOFError:
+                        pass
+                    self.paused_human_time_s += time.perf_counter() - t_pause_start
+                payload, images_b64 = self._run_so101_cli_subprocess(
+                    ["status", f"swap_ready_{target_color}"]
+                )
+                if hasattr(self.env, "current_marker_color"):
+                    self.env.current_marker_color = target_color
+                if hasattr(self.env, "marker_swaps"):
+                    self.env.marker_swaps += 1
+            except Exception as exc:  # noqa: BLE001
+                self.code_hallucinations += 1
+                msg = f"request_marker_swap error: {exc}"
+                self.hallucination_log.append(msg)
+                return ToolExecutionResult(
+                    tool_name=tool_name,
+                    response_json=json.dumps({"status": "error", "error": msg}),
+                )
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                response_json=json.dumps(
+                    {
+                        "status": "ok",
+                        "requested_color": target_color,
+                        "message": (
+                            f"Human operator placed the '{target_color}' marker in the front low bin. "
+                            "Now run so101-pickup-marker followed by so101-calibrate-paper-contact."
+                        ),
+                        **payload,
+                    }
+                ),
+                images_base64_png=images_b64,
             )
 
         if tool_name == "get_workspace_detail":
@@ -442,7 +811,6 @@ class WhiteboardToolBelt:
                 ),
             )
 
-
         if tool_name == "finish_drawing":
             self.env.move_to_home()
             self.finished = True
@@ -466,7 +834,8 @@ class WhiteboardToolBelt:
         self.code_hallucinations += 1
         msg = (
             f"Unknown tool '{tool_name}'. Available tools: "
-            "get_workspace_detail, select_marker, draw_primitives, draw_waypoints, run_python, finish_drawing."
+            "get_workspace_detail, select_marker, draw_primitives, draw_waypoints, run_python, "
+            "so101_cli, update_calibration, request_marker_swap, finish_drawing."
         )
         self.hallucination_log.append(msg)
         return ToolExecutionResult(

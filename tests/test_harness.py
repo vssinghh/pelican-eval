@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 
+from envs.real_env import RealWhiteboardEnv
 from envs.sim_env import SimWhiteboardEnv
-from harness.tools import WhiteboardToolBelt
+from harness.prompts import get_system_prompt, get_task_prompt
+from harness.tools import WhiteboardToolBelt, get_tool_schemas
 
 
 def test_tool_belt_and_hallucination_tracking() -> None:
@@ -108,3 +110,49 @@ def test_three_color_marker_dock_swaps() -> None:
         assert belt.code_hallucinations == 1
     finally:
         env.close()
+
+
+def test_real_skills_and_human_bin_swap_tools() -> None:
+    """Verify the 2 physical skills load into the real prompt and so101_cli/request_marker_swap dispatch."""
+    real_sys = get_system_prompt("real")
+    real_task = get_task_prompt("real")
+    assert "so101-pickup-marker" in real_sys
+    assert "so101-calibrate-paper-contact" in real_sys
+    assert "request_marker_swap" in real_sys
+    assert "request_marker_swap" in real_task
+
+    schemas = get_tool_schemas("real")
+    names = {s["function"]["name"] for s in schemas}
+    assert {"so101_cli", "update_calibration", "request_marker_swap"}.issubset(names)
+
+    env = RealWhiteboardEnv(mock_hardware=True)
+    try:
+        belt = WhiteboardToolBelt(env)
+
+        # 1. so101_cli status call
+        res_cli = belt.dispatch("so101_cli", {"args": ["status", "test_step"]})
+        cli_data = json.loads(res_cli.response_json)
+        assert cli_data["status"] == "ok"
+        assert cli_data["grasp_state"] == "BARREL_HELD_IN_FLAT_PAD"
+        assert len(res_cli.images_base64_png) == 2
+
+        # 2. request_marker_swap to blue
+        res_swap = belt.dispatch("request_marker_swap", {"color": "blue"})
+        swap_data = json.loads(res_swap.response_json)
+        assert swap_data["status"] == "ok"
+        assert swap_data["requested_color"] == "blue"
+        assert env.current_marker_color == "blue"
+        assert env.marker_swaps == 1
+
+        # 3. so101_cli draw-strokes mirrors normalized (u, v) strokes to canvas
+        res_draw = belt.dispatch(
+            "so101_cli",
+            {"args": ["draw-strokes", '[{"points": [[0.25, 0.30], [0.75, 0.30]]}]', "test_draw"]},
+        )
+        draw_data = json.loads(res_draw.response_json)
+        assert draw_data["status"] == "ok"
+        assert env.ink_pixels_drawn > 100
+        assert "blue" in env.colors_used
+    finally:
+        env.close()
+

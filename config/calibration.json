@@ -1,35 +1,45 @@
 {
+  "board_x_range": [
+    0.202,
+    0.226
+  ],
+  "board_y_range": [
+    -0.055,
+    -0.010
+  ],
   "plane_coeffs_abc": [
     -0.08,
     0.0,
-    0.0024
+    0.0745
   ],
+  "draw_z_pen_down": 0.0565,
+  "draw_z_pen_up": 0.0880,
   "single_marker_mode": true,
   "interactive_holder_swap": true,
-  "pickup_on_reset": true,
+  "pickup_on_reset": false,
   "pickup_ticks": [
-    2495,
-    1698,
-    2859,
-    1909,
+    2493,
+    1254,
+    2933,
+    2255,
     973
   ],
-  "target_pitch": 0.95,
+  "target_pitch": 1.65,
   "marker_slots_xyz": {
     "blue": [
-      0.165,
-      -0.14,
-      0.005
+      0.154,
+      -0.116,
+      0.034
     ],
     "red": [
-      0.165,
-      -0.14,
-      0.005
+      0.154,
+      -0.116,
+      0.034
     ],
     "green": [
-      0.165,
-      -0.14,
-      0.005
+      0.154,
+      -0.116,
+      0.034
     ]
   }
 }

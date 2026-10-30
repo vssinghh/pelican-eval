@@ -97,7 +97,8 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
             else np.array([0.70, -1.05, 1.40, 0.03, -np.pi / 2.0, GRIPPER_NORM_GRASP], dtype=np.float32)
         )
 
-        self.ik_solver = SO101IKSolver(site_name="pen_tip", target_pitch=self.target_pitch)
+        site_name = "pinch_site" if self.single_marker_mode else "pen_tip"
+        self.ik_solver = SO101IKSolver(site_name=site_name, target_pitch=self.target_pitch)
 
         self.canvas_h = int(WORKSPACE_SPEC["canvas_resolution_px"]["height"])
         self.canvas_w = int(WORKSPACE_SPEC["canvas_resolution_px"]["width"])
@@ -705,6 +706,27 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
             "pen_tip_xyz": np.asarray(self.pen_tip_xyz_log, dtype=np.float32),
             "ink_contact": np.asarray(self.ink_contact_log, dtype=bool),
         }
+
+    def reload_calibration(self) -> tuple[float, float, float]:
+        """Reload plane_coeffs_abc and target_pitch from calibration.json after live calibration."""
+        self.plane_coeffs = self._load_calibration()
+        self.ik_solver.target_pitch = self.target_pitch
+        return self.plane_coeffs
+
+    def suspend_connections(self) -> None:
+        """Release USB serial port and cameras without disabling torque so so101_cli can run."""
+        for cap in self._captures.values():
+            cap.release()
+        self._captures.clear()
+        if self._port_handler is not None:
+            self._port_handler.closePort()
+            self._port_handler = None
+            self._packet_handler = None
+
+    def resume_connections(self) -> None:
+        """Re-open USB serial port and cameras after an external so101_cli call completes."""
+        if not self.mock_hardware and self._port_handler is None:
+            self._connect_hardware()
 
     def close(self) -> None:
         """Disable servo torque and release camera captures and serial port."""

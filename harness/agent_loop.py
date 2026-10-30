@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 
 from envs.base import SO101WhiteboardEnv
 from envs.verify_whiteboard import get_reference_pelican_strokes
-from harness.prompts import SYSTEM_PROMPT, TASK_PROMPT
-from harness.tools import OPENAI_TOOL_SCHEMAS, WhiteboardToolBelt
+from harness.prompts import get_system_prompt, get_task_prompt
+from harness.tools import WhiteboardToolBelt, get_tool_schemas
 
 # Suppress verbose LiteLLM debug banners
 litellm.suppress_debug_info = True
@@ -75,13 +75,18 @@ class PelicanAgentRunner:
         env.reset()
         belt = WhiteboardToolBelt(env)
 
+        sys_prompt = get_system_prompt(domain)
+        task_prompt = get_task_prompt(domain)
+        active_schemas = get_tool_schemas(domain)
+        effective_max_turns = max(self.max_turns, 35) if domain == "real" and self.max_turns <= 10 else self.max_turns
+
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": TASK_PROMPT},
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": task_prompt},
         ]
         transcript: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": TASK_PROMPT},
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": task_prompt},
         ]
 
         total_cost_usd = 0.0
@@ -95,12 +100,12 @@ class PelicanAgentRunner:
             result = self._run_reference_expert_loop(belt, transcript, domain, t_start)
             return result
 
-        for turn_idx in range(self.max_turns):
+        for turn_idx in range(effective_max_turns):
             turns_used = turn_idx + 1
             completion_kwargs: dict[str, Any] = {
                 "model": self.model,
                 "messages": messages,
-                "tools": OPENAI_TOOL_SCHEMAS,
+                "tools": active_schemas,
                 "tool_choice": "auto",
                 "timeout": self.timeout_s,
             }
@@ -173,15 +178,24 @@ class PelicanAgentRunner:
                         pending_vision_images.extend(exec_res.images_base64_png)
 
                 if pending_vision_images and not belt.finished:
+                    if len(pending_vision_images) >= 3:
+                        cam_desc = (
+                            "Here are the live annotated camera images from the robot: "
+                            "(1) Camera 0 overhead view, (2) Camera 1 side view, and "
+                            "(3) Camera 2 eye-in-hand wrist view (with the green FLAT PAD ZONE box). "
+                            "Continue your closed-loop skill or drawing step, or call finish_drawing(summary) if complete."
+                        )
+                    else:
+                        cam_desc = (
+                            "Here are the live camera images: "
+                            "(1) overhead_cam (top-down RGB view of the robot, 3-slot marker stand, and whiteboard), "
+                            "and (2) third_person_cam (angled 3D RGB view). "
+                            "Draw or refine strokes on the whiteboard, or call finish_drawing(summary) if complete."
+                        )
                     vision_content: list[dict[str, Any]] = [
                         {
                             "type": "text",
-                            "text": (
-                                "Here are the live camera images from get_workspace_detail(): "
-                                "(1) overhead_cam (top-down RGB view of the robot, 3-slot marker stand, and whiteboard), "
-                                "and (2) third_person_cam (angled 3D RGB view). "
-                                "Draw or refine strokes on the whiteboard, or call finish_drawing(summary) if complete."
-                            ),
+                            "text": cam_desc,
                         }
                     ]
                     for b64_img in pending_vision_images:
@@ -195,7 +209,7 @@ class PelicanAgentRunner:
                     transcript.append(
                         {
                             "role": "user",
-                            "content": "[Attached 2 live camera PNG images from get_workspace_detail()]",
+                            "content": f"[Attached {len(pending_vision_images)} live camera PNG images]",
                         }
                     )
 
@@ -211,21 +225,26 @@ class PelicanAgentRunner:
                         {"summary": choice_msg.content or "Finished drawing."},
                     )
                     break
+                nudge_msg = (
+                    "You have not completed the drawing yet. Use so101_cli (following so101-pickup-marker "
+                    "and so101-calibrate-paper-contact), draw_primitives(), or run_python() to draw the "
+                    "pelican riding a bicycle, then call finish_drawing()."
+                    if domain == "real"
+                    else "You have not drawn on the whiteboard yet. Please call get_workspace_detail(), "
+                    "draw_primitives(), or run_python() to draw the pelican riding a bicycle, "
+                    "then call finish_drawing()."
+                )
                 messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            "You have not drawn on the whiteboard yet. Please call get_workspace_detail(), "
-                            "draw_primitives(), or run_python() to draw the pelican riding a bicycle, "
-                            "then call finish_drawing()."
-                        ),
+                        "content": nudge_msg,
                     }
                 )
 
         if not belt.finished:
             env.move_to_home()
 
-        e2e_time_s = time.perf_counter() - t_start
+        e2e_time_s = max(0.0, (time.perf_counter() - t_start) - belt.paused_human_time_s)
         final_obs = env.get_obs()
         return AgentRunResult(
             model=self.model,
@@ -283,7 +302,7 @@ class PelicanAgentRunner:
                 }
             )
 
-        e2e_time_s = time.perf_counter() - t_start
+        e2e_time_s = max(0.0, (time.perf_counter() - t_start) - belt.paused_human_time_s)
         final_obs = belt.env.get_obs()
         return AgentRunResult(
             model=self.model,

@@ -65,6 +65,9 @@ class SO101IKSolver:
 
         self._low_4d = JOINT_LIMITS_LOW[:4].astype(np.float64)
         self._high_4d = JOINT_LIMITS_HIGH[:4].astype(np.float64)
+        if site_name == "pinch_site":
+            self._low_4d[2] = max(float(self._low_4d[2]), 0.08)
+        self._high_4d[3] = min(float(self._high_4d[3]), 1.520)
         self._jacp = np.zeros((3, model.nv), dtype=np.float64)
         self._j_pitch = np.array([[0.0, 0.15, 0.15, 0.15]], dtype=np.float64)
 
@@ -97,9 +100,11 @@ class SO101IKSolver:
 
         mujoco.mj_resetData(self.model, self.data)
 
-        if q_init is not None:
+        if q_init is not None and float(q_init[2]) >= 0.12:
             for idx in range(4):
-                self.data.qpos[self._qpos_adrs[idx]] = float(q_init[idx])
+                self.data.qpos[self._qpos_adrs[idx]] = float(
+                    np.clip(q_init[idx], self._low_4d[idx], self._high_4d[idx])
+                )
         else:
             pan_guess = float(-np.arctan2(tgt[1], max(0.05, tgt[0] - 0.0388)))
             init_guess = [pan_guess, -0.25, 0.60, 1.00]
@@ -131,6 +136,18 @@ class SO101IKSolver:
             dq = j_full.T @ np.linalg.solve(j_full @ j_full.T + 1e-4 * np.eye(4), err)
             dq = np.clip(dq, -0.25, 0.25)
             q_new = np.clip(q_cur + dq, self._low_4d, self._high_4d)
+            clipped = (q_new <= self._low_4d + 1e-5) | (q_new >= self._high_4d - 1e-5)
+            if np.any(clipped) and np.linalg.norm(pos_err) > 2e-4:
+                free = ~clipped
+                if int(np.sum(free)) >= 2:
+                    rem = pos_err - j_pos[:, clipped] @ (q_new[clipped] - q_cur[clipped])
+                    jf = j_pos[:, free]
+                    dq_f = jf.T @ np.linalg.solve(jf @ jf.T + 1e-4 * np.eye(3), rem)
+                    q_new[free] = np.clip(
+                        q_cur[free] + np.clip(dq_f, -0.20, 0.20),
+                        self._low_4d[free],
+                        self._high_4d[free],
+                    )
             for i, qi in enumerate(q_idx):
                 self.data.qpos[qi] = float(q_new[i])
 
