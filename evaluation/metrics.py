@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from evaluation.visual_judge import VisualRubricBreakdown
@@ -35,6 +35,7 @@ class EpisodeMetrics:
     canvas_path: str
     timelapse_path: str
     total_tokens: int = 0
+    skill_stages: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.total_tokens == 0:
@@ -94,6 +95,7 @@ def build_episode_metrics(
         finished_cleanly=run_res.finished_cleanly,
         canvas_path=canvas_rel_path,
         timelapse_path=timelapse_rel_path,
+        skill_stages=dict(run_res.skill_stages),
     )
 
 

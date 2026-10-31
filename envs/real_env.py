@@ -206,8 +206,8 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
                 f"Failed to open SO-ARM101 serial port {self.serial_port} at {self.baudrate} baud."
             )
 
-        # Set firm 75% clamping torque limit on gripper motor (ID 6)
-        self._packet_handler.write2ByteTxRx(self._port_handler, 6, 48, 750)
+        # Configure Motor 6 (gripper) for continuous holding without tripping overload latch
+        self._configure_gripper_safe_holding()
 
         try:
             import cv2  # type: ignore[import-not-found]
@@ -224,6 +224,35 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
                     self._captures[cam_name] = cap
         except ImportError:
             pass
+
+    def _configure_gripper_safe_holding(self) -> None:
+        """Configure Motor 6 overload thresholds and 45% continuous holding torque limit."""
+        if self.mock_hardware or self._port_handler is None or self._packet_handler is None:
+            return
+        self._packet_handler.write1ByteTxRx(self._port_handler, 6, 55, 0)
+        self._packet_handler.write1ByteTxRx(self._port_handler, 6, 34, 75)
+        self._packet_handler.write1ByteTxRx(self._port_handler, 6, 36, 95)
+        self._packet_handler.write1ByteTxRx(self._port_handler, 6, 55, 1)
+        self._packet_handler.write2ByteTxRx(self._port_handler, 6, 48, 450)
+
+    def _compute_safe_gripper_hold_tick(self, target_g: int) -> int:
+        """Cap closed-loop stall error on Motor 6 so continuous holding never trips Reg 60 -> 0."""
+        if self.mock_hardware or self._port_handler is None or self._packet_handler is None:
+            return int(target_g)
+        self._packet_handler.write2ByteTxRx(self._port_handler, 6, 48, 450)
+        cur_g_raw, _, _ = self._packet_handler.read2ByteTxRx(self._port_handler, 6, 56)
+        cur_g = int(cur_g_raw)
+        if 0 < cur_g < 2600 and int(target_g) <= 1850:
+            hold_goal = max(int(target_g), cur_g - 110)
+            cur_load_raw, _, _ = self._packet_handler.read2ByteTxRx(self._port_handler, 6, 60)
+            if int(cur_load_raw) == 0:
+                self._packet_handler.write1ByteTxRx(self._port_handler, 6, 40, 0)
+                self._packet_handler.write2ByteTxRx(self._port_handler, 6, 42, cur_g)
+                time.sleep(0.03)
+                self._packet_handler.write1ByteTxRx(self._port_handler, 6, 40, 1)
+                time.sleep(0.02)
+            return hold_goal
+        return int(target_g)
 
     def set_torque(self, enabled: bool, keep_gripper: bool = False) -> None:
         """Enable or disable servo torque on the Feetech STS3215 motors."""
@@ -264,8 +293,7 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
         target_ticks[5] = self.range_min[5] + g_norm * (self.range_max[5] - self.range_min[5])
         clamped_ticks = np.clip(np.round(target_ticks), self.range_min, self.range_max).astype(np.int32)
         if g_norm <= GRIPPER_NORM_GRASP + 0.05:
-            # Command 1700 so the STS3215 proportional loop saturates at full 75% clamping torque
-            clamped_ticks[5] = 1700
+            clamped_ticks[5] = self._compute_safe_gripper_hold_tick(1700)
 
         for servo_id in range(1, 7):
             self._packet_handler.write2ByteTxRx(
@@ -273,13 +301,13 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
             )
 
     def pickup_marker_from_desk(self) -> dict[str, Any]:
-        """Clamp the marker resting in the figurine holder at 75% torque and lift straight up."""
+        """Clamp the marker resting in the figurine holder at safe continuous holding torque and lift."""
         if self.mock_hardware:
             self._holding_marker = True
             return {"picked_up": True, "pickup_ticks": self.pickup_ticks}
 
         self.set_torque(True)
-        self._packet_handler.write2ByteTxRx(self._port_handler, 6, 48, 750)
+        self._configure_gripper_safe_holding()
 
         p0, p1, p2, p3, p4 = self.pickup_ticks
         open_tick = int(self.range_max[5] - 65)
@@ -303,18 +331,22 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
                 time.sleep(0.04)
             time.sleep(0.2)
 
-        # 2. Clamp Motor 6 firmly onto barrel in place (Goal_Position = 1700 for full 75% torque)
-        for g_cmd in (2500, 2150, 1700):
+        # 2. Clamp Motor 6 smoothly onto barrel, then cap continuous holding goal
+        for g_cmd in (2500, 2250, 2000):
             self._packet_handler.write2ByteTxRx(self._port_handler, 6, 42, g_cmd)
-            time.sleep(0.3)
+            time.sleep(0.28)
+        hold_tick = self._compute_safe_gripper_hold_tick(1700)
+        self._packet_handler.write2ByteTxRx(self._port_handler, 6, 42, hold_tick)
+        time.sleep(0.15)
 
         # 3. Lift marker smoothly straight up and out of the figurine holder
         grasp_closed = grasp_pose.copy()
-        grasp_closed[5] = 1700.0
+        grasp_closed[5] = float(hold_tick)
+        lift_up[5] = float(hold_tick)
         for step_idx in range(1, 21):
             alpha = float(step_idx) / 20.0
             cmd = np.round((1.0 - alpha) * grasp_closed + alpha * lift_up).astype(int)
-            cmd[5] = 1700
+            cmd[5] = hold_tick
             for i in range(6):
                 self._packet_handler.write2ByteTxRx(self._port_handler, i + 1, 42, int(cmd[i]))
             time.sleep(0.04)
@@ -329,19 +361,20 @@ class RealWhiteboardEnv(SO101WhiteboardEnv):
             self._holding_marker = False
             return {"released": True}
 
+        hold_tick = self._compute_safe_gripper_hold_tick(1700)
         p0, p1, p2, p3, p4 = self.pickup_ticks
         open_tick = int(self.range_max[5] - 65)
-        holder_pose = np.array([p0, p1, p2, p3, p4, 1700], dtype=float)
+        holder_pose = np.array([p0, p1, p2, p3, p4, hold_tick], dtype=float)
 
         cur = np.array(
             [self._packet_handler.read2ByteTxRx(self._port_handler, i + 1, 56)[0] for i in range(6)],
             dtype=float,
         )
-        cur[5] = 1700.0
+        cur[5] = float(hold_tick)
         for step_idx in range(1, 21):
             alpha = float(step_idx) / 20.0
             cmd = np.round((1.0 - alpha) * cur + alpha * holder_pose).astype(int)
-            cmd[5] = 1700
+            cmd[5] = hold_tick
             for i in range(6):
                 self._packet_handler.write2ByteTxRx(self._port_handler, i + 1, 42, int(cmd[i]))
             time.sleep(0.04)

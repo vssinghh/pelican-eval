@@ -96,5 +96,56 @@ def test_litellm_provider_agent_loop_on_real_env_mock(monkeypatch: Any) -> None:
         assert res.prompt_tokens == 600
         assert res.completion_tokens == 150
         assert abs(res.cost_usd - 0.0045) < 1e-6
+        assert res.skill_stages["drawing_executed"] is True
     finally:
         real_env.close()
+
+
+def test_rolling_vision_context_pruning_in_multi_turn_loop(monkeypatch: Any) -> None:
+    """Verify PelicanAgentRunner prunes older base64 camera turns so at most 2 visual turns stay in context."""
+    call_seq = [
+        SimpleNamespace(id="c1", function=SimpleNamespace(name="so101_cli", arguments='{"args": ["status", "s1"]}')),
+        SimpleNamespace(id="c2", function=SimpleNamespace(name="so101_cli", arguments='{"args": ["status", "s2"]}')),
+        SimpleNamespace(id="c3", function=SimpleNamespace(name="so101_cli", arguments='{"args": ["status", "s3"]}')),
+        SimpleNamespace(id="c4", function=SimpleNamespace(name="so101_cli", arguments='{"args": ["status", "s4"]}')),
+        SimpleNamespace(id="c5", function=SimpleNamespace(name="finish_drawing", arguments='{"summary": "Done"}')),
+    ]
+    turn_counter = {"idx": 0}
+    seen_vision_turn_counts: list[int] = []
+
+    def _fake_completion(**kwargs: Any) -> Any:
+        msgs = kwargs["messages"]
+        vis_turns = sum(
+            1
+            for m in msgs
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), list)
+            and any(isinstance(p, dict) and p.get("type") == "image_url" for p in m["content"])
+        )
+        seen_vision_turn_counts.append(vis_turns)
+        idx = turn_counter["idx"]
+        turn_counter["idx"] += 1
+        tc = call_seq[min(idx, len(call_seq) - 1)]
+        msg = SimpleNamespace(content="Step", tool_calls=[tc])
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=msg)],
+            usage=SimpleNamespace(prompt_tokens=100, completion_tokens=25),
+        )
+
+    monkeypatch.setattr(litellm, "completion", _fake_completion)
+    monkeypatch.setattr(litellm, "completion_cost", lambda completion_response: 0.001)
+
+    real_env = RealWhiteboardEnv(mock_hardware=True)
+    try:
+        runner = PelicanAgentRunner(
+            model="gemini/gemini-2.5-pro",
+            max_turns=6,
+            max_vision_history_turns=2,
+        )
+        res = runner.run_episode(real_env, domain="real")
+        assert res.finished_cleanly
+        # Turns 1..5 see [0, 1, 2, 2, 2] active vision turns (never exceeding 2)
+        assert seen_vision_turn_counts == [0, 1, 2, 2, 2]
+    finally:
+        real_env.close()
+

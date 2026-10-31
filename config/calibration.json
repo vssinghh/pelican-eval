@@ -15,7 +15,7 @@
   "draw_z_pen_down": 0.0565,
   "draw_z_pen_up": 0.0880,
   "single_marker_mode": true,
-  "interactive_holder_swap": true,
+  "interactive_holder_swap": false,
   "pickup_on_reset": false,
   "pickup_ticks": [
     2493,

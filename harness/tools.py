@@ -277,7 +277,10 @@ REAL_SKILL_TOOL_SCHEMAS: list[dict[str, Any]] = [
 def get_tool_schemas(domain: str = "sim") -> list[dict[str, Any]]:
     """Return tool schemas for the given execution domain ('sim' or 'real')."""
     if domain == "real":
-        return OPENAI_TOOL_SCHEMAS + REAL_SKILL_TOOL_SCHEMAS
+        real_base_schemas = [
+            s for s in OPENAI_TOOL_SCHEMAS if s.get("function", {}).get("name") != "select_marker"
+        ]
+        return real_base_schemas + REAL_SKILL_TOOL_SCHEMAS
     return OPENAI_TOOL_SCHEMAS
 
 
@@ -324,7 +327,7 @@ class WhiteboardToolBelt:
         self.sandbox = RestrictedPythonSandbox(
             draw_primitives_fn=self._exec_draw_primitives_internal,
             draw_waypoints_fn=self.env.execute_cartesian_path,
-            select_marker_fn=self.env.select_marker,
+            select_marker_fn=self._safe_select_marker,
         )
 
         self.spatial_hallucinations: int = 0
@@ -339,9 +342,47 @@ class WhiteboardToolBelt:
             "run_python": 0,
             "finish_drawing": 0,
         }
+        is_real_skill_env = hasattr(self.env, "suspend_connections")
+        self._awaiting_pickup_verify: bool = is_real_skill_env
+        self.skill_stages: dict[str, Any] = {
+            "pickup_verified": not is_real_skill_env,
+            "pickups_verified": 0 if is_real_skill_env else 1,
+            "calibration_saved": not is_real_skill_env,
+            "calibrations_saved": 0 if is_real_skill_env else 1,
+            "drawing_executed": False,
+            "drawing_strokes_executed": 0,
+            "swaps_requested": 0,
+        }
         self.hallucination_log: list[str] = []
         self.finished: bool = False
         self.finish_summary: str = ""
+
+    def _safe_select_marker(self, color: str) -> dict[str, Any]:
+        """Guard physical single-marker mode so models must use request_marker_swap to switch colors."""
+        target_color = str(color).strip().lower()
+        if target_color not in AVAILABLE_MARKER_COLORS:
+            raise ValueError(
+                f"Invalid marker color '{color}'. Available colors: {list(AVAILABLE_MARKER_COLORS)}"
+            )
+        if getattr(self.env, "single_marker_mode", False):
+            cur_color = str(getattr(self.env, "current_marker_color", "black")).strip().lower()
+            if target_color == cur_color:
+                return {
+                    "swapped": False,
+                    "previous_color": cur_color,
+                    "active_color": cur_color,
+                    "marker_swaps": int(getattr(self.env, "marker_swaps", 0)),
+                    "colors_used": sorted(getattr(self.env, "colors_used", set())),
+                }
+            raise RuntimeError(
+                f"Physical robot is currently holding '{cur_color}' in single-marker bin mode. "
+                f"Call request_marker_swap(color='{target_color}') first, then run "
+                f"so101-pickup-marker and so101-calibrate-paper-contact before drawing in '{target_color}'."
+            )
+        swap_res = self.env.select_marker(target_color)
+        if swap_res.get("swapped"):
+            self.skill_stages["swaps_requested"] += 1
+        return swap_res
 
     def _run_so101_cli_subprocess(self, cli_args: list[str]) -> tuple[dict[str, Any], list[str]]:
         """Execute scripts/so101_cli.py with cli_args and return (json_payload, base64_grid_images)."""
@@ -439,12 +480,14 @@ class WhiteboardToolBelt:
         w = int(getattr(self.env, "canvas_w", 1000))
         h = int(getattr(self.env, "canvas_h", 500))
 
+        mirrored_strokes = 0
         for stroke in data:
             if not isinstance(stroke, dict):
                 continue
             pts = stroke.get("points", [])
             if not isinstance(pts, list) or len(pts) < 2:
                 continue
+            mirrored_strokes += 1
             if hasattr(self.env, "colors_used"):
                 self.env.colors_used.add(color_name)
             for idx in range(1, len(pts)):
@@ -458,6 +501,11 @@ class WhiteboardToolBelt:
                 if hasattr(self.env, "ink_pixels_drawn"):
                     self.env.ink_pixels_drawn += max(1, int(np.hypot(r1 - r0, c1 - c0)))
 
+        if mirrored_strokes > 0:
+            self.skill_stages["drawing_strokes_executed"] += mirrored_strokes
+            if int(getattr(self.env, "ink_pixels_drawn", 0)) > 0:
+                self.skill_stages["drawing_executed"] = True
+
     def _exec_draw_primitives_internal(
         self,
         strokes: list[dict[str, Any]],
@@ -468,7 +516,7 @@ class WhiteboardToolBelt:
             raise ValueError("strokes must be a non-empty list of primitive dictionaries.")
 
         if default_color is not None:
-            self.env.select_marker(default_color)
+            self._safe_select_marker(default_color)
 
         # Group contiguous strokes by color so the robot swaps markers at the dock between color batches
         groups: list[tuple[str | None, list[dict[str, Any]]]] = []
@@ -493,7 +541,7 @@ class WhiteboardToolBelt:
 
         for group_color, group_strokes in groups:
             if group_color is not None:
-                self.env.select_marker(group_color)
+                self._safe_select_marker(group_color)
             waypoints_xyz, compile_warnings, compile_hallucinations = compile_primitives_to_waypoints(
                 group_strokes
             )
@@ -506,6 +554,10 @@ class WhiteboardToolBelt:
             combined_warnings.extend(compile_warnings)
             combined_warnings.extend(path_stats["warnings"])
             final_tip = list(path_stats["final_pen_tip_xyz"])
+
+        if total_ink_added > 0:
+            self.skill_stages["drawing_strokes_executed"] += len(strokes)
+            self.skill_stages["drawing_executed"] = True
 
         obs_fast = self.env.get_obs()
         return {
@@ -568,8 +620,9 @@ class WhiteboardToolBelt:
                     tool_name=tool_name,
                     response_json=json.dumps({"status": "error", "error": msg}),
                 )
+            str_args = [str(a) for a in cli_args]
             try:
-                payload, images_b64 = self._run_so101_cli_subprocess([str(a) for a in cli_args])
+                payload, images_b64 = self._run_so101_cli_subprocess(str_args)
             except Exception as exc:  # noqa: BLE001
                 self.code_hallucinations += 1
                 msg = f"so101_cli error: {exc}"
@@ -578,6 +631,23 @@ class WhiteboardToolBelt:
                     tool_name=tool_name,
                     response_json=json.dumps({"status": "error", "error": msg}),
                 )
+
+            subcmd = str_args[0].strip().lower()
+            arg1 = str_args[1].strip().lower() if len(str_args) >= 2 else ""
+            if (
+                subcmd == "open-observe"
+                or (subcmd == "gripper" and arg1 == "open")
+                or (subcmd == "safe-park" and arg1 == "release")
+            ):
+                self._awaiting_pickup_verify = True
+            elif (
+                payload.get("grasp_state") == "BARREL_HELD_IN_FLAT_PAD"
+                and self._awaiting_pickup_verify
+            ):
+                self.skill_stages["pickup_verified"] = True
+                self.skill_stages["pickups_verified"] += 1
+                self._awaiting_pickup_verify = False
+
             return ToolExecutionResult(
                 tool_name=tool_name,
                 response_json=json.dumps({"status": "ok", **payload}),
@@ -594,7 +664,8 @@ class WhiteboardToolBelt:
                     tool_name=tool_name,
                     response_json=json.dumps({"status": "error", "error": msg}),
                 )
-            cal_path = Path(__file__).resolve().parent.parent / "config" / "calibration.json"
+            default_cal = Path(__file__).resolve().parent.parent / "config" / "calibration.json"
+            cal_path = Path(getattr(self.env, "calibration_path", default_cal))
             try:
                 cal_data = json.loads(cal_path.read_text(encoding="utf-8")) if cal_path.exists() else {}
                 cal_data["plane_coeffs_abc"] = [float(coeffs[0]), float(coeffs[1]), float(coeffs[2])]
@@ -607,6 +678,8 @@ class WhiteboardToolBelt:
                 cal_path.write_text(json.dumps(cal_data, indent=2) + "\n", encoding="utf-8")
                 if hasattr(self.env, "reload_calibration"):
                     self.env.reload_calibration()
+                self.skill_stages["calibration_saved"] = True
+                self.skill_stages["calibrations_saved"] += 1
             except Exception as exc:  # noqa: BLE001
                 self.code_hallucinations += 1
                 msg = f"update_calibration error: {exc}"
@@ -651,6 +724,8 @@ class WhiteboardToolBelt:
                     self.env.current_marker_color = target_color
                 if hasattr(self.env, "marker_swaps"):
                     self.env.marker_swaps += 1
+                self.skill_stages["swaps_requested"] += 1
+                self._awaiting_pickup_verify = True
             except Exception as exc:  # noqa: BLE001
                 self.code_hallucinations += 1
                 msg = f"request_marker_swap error: {exc}"
@@ -700,7 +775,7 @@ class WhiteboardToolBelt:
         if tool_name == "select_marker":
             color = args.get("color", "")
             try:
-                swap_res = self.env.select_marker(str(color))
+                swap_res = self._safe_select_marker(str(color))
             except Exception as exc:  # noqa: BLE001
                 self.code_hallucinations += 1
                 msg = f"select_marker error: {exc}"
@@ -751,7 +826,7 @@ class WhiteboardToolBelt:
                 )
             try:
                 if wp_color is not None:
-                    self.env.select_marker(str(wp_color))
+                    self._safe_select_marker(str(wp_color))
                 stats = self.env.execute_cartesian_path(waypoints)
             except Exception as exc:  # noqa: BLE001
                 self.code_hallucinations += 1
@@ -761,6 +836,10 @@ class WhiteboardToolBelt:
                     tool_name=tool_name,
                     response_json=json.dumps({"status": "error", "error": msg}),
                 )
+
+            if int(stats.get("ink_pixels_added", 0)) > 0:
+                self.skill_stages["drawing_strokes_executed"] += 1
+                self.skill_stages["drawing_executed"] = True
 
             if stats["spatial_hallucinations"] > 0:
                 self.spatial_hallucinations += int(stats["spatial_hallucinations"])
@@ -790,6 +869,9 @@ class WhiteboardToolBelt:
                 self.hallucination_log.append(f"Spatial (run_python): {w}")
             if sb_res.error_message:
                 self.hallucination_log.append(f"Code (run_python): {sb_res.error_message}")
+            if sb_res.waypoints_executed > 0 and sb_res.strokes_executed == 0 and sb_res.ink_pixels_added > 0:
+                self.skill_stages["drawing_strokes_executed"] += 1
+                self.skill_stages["drawing_executed"] = True
 
             obs_after = self.env.get_obs()
             return ToolExecutionResult(

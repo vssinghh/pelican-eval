@@ -40,8 +40,36 @@ class AgentRunResult:
     finish_summary: str
     colors_used: list[str] = field(default_factory=list)
     marker_swaps: int = 0
+    skill_stages: dict[str, Any] = field(default_factory=dict)
     hallucination_log: list[str] = field(default_factory=list)
     transcript: list[dict[str, Any]] = field(default_factory=list)
+
+
+def prune_old_vision_messages(messages: list[dict[str, Any]], keep_recent: int = 2) -> int:
+    """Prune base64 image blocks from older user turns while keeping the latest keep_recent visual turns."""
+    if keep_recent < 0:
+        return 0
+
+    vision_indices: list[int] = []
+    for idx, msg in enumerate(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, list) and any(
+            isinstance(part, dict) and part.get("type") == "image_url" for part in content
+        ):
+            vision_indices.append(idx)
+
+    to_prune = vision_indices if keep_recent == 0 else vision_indices[:-keep_recent]
+    for idx in to_prune:
+        messages[idx] = {
+            "role": "user",
+            "content": (
+                "[Earlier camera images omitted from context window; refer to the JSON tool telemetry "
+                "above and the latest live camera images in recent turns.]"
+            ),
+        }
+    return len(to_prune)
 
 
 class PelicanAgentRunner:
@@ -53,6 +81,7 @@ class PelicanAgentRunner:
         max_turns: int = 10,
         temperature: float = 0.2,
         timeout_s: int = 120,
+        max_vision_history_turns: int = 2,
         env_file: str | Path | None = None,
     ) -> None:
         if env_file is not None:
@@ -69,6 +98,7 @@ class PelicanAgentRunner:
         self.max_turns = int(max_turns)
         self.temperature = float(temperature)
         self.timeout_s = int(timeout_s)
+        self.max_vision_history_turns = int(max_vision_history_turns)
 
     def run_episode(self, env: SO101WhiteboardEnv, domain: str = "sim") -> AgentRunResult:
         """Reset the environment and run the model until finish_drawing() or max_turns."""
@@ -206,6 +236,7 @@ class PelicanAgentRunner:
                             }
                         )
                     messages.append({"role": "user", "content": vision_content})
+                    prune_old_vision_messages(messages, keep_recent=self.max_vision_history_turns)
                     transcript.append(
                         {
                             "role": "user",
@@ -263,6 +294,7 @@ class PelicanAgentRunner:
             finish_summary=belt.finish_summary,
             colors_used=list(final_obs.get("colors_used", [])),
             marker_swaps=int(final_obs.get("marker_swaps", 0)),
+            skill_stages=dict(belt.skill_stages),
             hallucination_log=list(belt.hallucination_log),
             transcript=transcript,
         )
@@ -321,6 +353,7 @@ class PelicanAgentRunner:
             finish_summary=belt.finish_summary,
             colors_used=list(final_obs.get("colors_used", [])),
             marker_swaps=int(final_obs.get("marker_swaps", 0)),
+            skill_stages=dict(belt.skill_stages),
             hallucination_log=list(belt.hallucination_log),
             transcript=transcript,
         )

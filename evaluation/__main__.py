@@ -131,6 +131,14 @@ def main() -> None:
             print(f"  Hallucinations: {ep_metrics.total_hallucinations} "
                   f"(Spatial: {ep_metrics.spatial_hallucinations}, Code: {ep_metrics.code_hallucinations})")
             print(f"  Tool Calls:     {ep_metrics.total_tool_calls} {ep_metrics.tool_call_counts}")
+            if ep_metrics.skill_stages:
+                st = ep_metrics.skill_stages
+                print(
+                    f"  Skill Stages:   Pickup={st.get('pickup_verified')} ({st.get('pickups_verified', 0)}), "
+                    f"Calibrate={st.get('calibration_saved')} ({st.get('calibrations_saved', 0)}), "
+                    f"Draw={st.get('drawing_executed')} ({st.get('drawing_strokes_executed', 0)} strokes), "
+                    f"Swaps={st.get('swaps_requested', 0)}"
+                )
             print(f"  Tokens Used:    {ep_metrics.total_tokens:,} "
                   f"(Input: {ep_metrics.prompt_tokens:,}, Output: {ep_metrics.completion_tokens:,})")
             print(f"  End-to-End:     {ep_metrics.e2e_time_s:.2f}s")
